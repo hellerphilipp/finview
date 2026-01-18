@@ -16,6 +16,8 @@ class Account(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(50), unique=True)
     currency: Mapped[Currency] = mapped_column(SqlEnum(Currency, native_enum=False))
+    mapping_spec: Mapped[str] = mapped_column(String(255), nullable=True)
+    
     transactions: Mapped[List["Transaction"]] = relationship(back_populates="account")
 
     def __repr__(self):

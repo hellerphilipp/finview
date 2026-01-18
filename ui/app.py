@@ -68,9 +68,11 @@ class FinViewApp(App):
             
             try:
                 # 1. Create Account
+                # Inside action_create_account(self) result handler:
                 new_acc = Account(
                     name=data["name"],
-                    currency=data["currency"]
+                    currency=data["currency"],
+                    mapping_spec=data["mapping_spec"], # Saved to DB
                 )
                 self.db.add(new_acc)
                 self.db.flush() # Flush to assign new_acc.id
