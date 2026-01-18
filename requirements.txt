@@ -1,5 +1,5 @@
-textual==0.86.0
-sqlalchemy==2.0.25
-PyYAML==6.0.1
-pydantic==2.6.1
-cel-python==0.1.5
+textual
+sqlalchemy
+PyYAML
+pydantic
+common-expression-language

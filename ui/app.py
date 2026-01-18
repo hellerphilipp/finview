@@ -1,3 +1,7 @@
+import os
+import datetime
+import csv
+
 from textual.app import App, ComposeResult
 from textual.widgets import Header, Footer, ListView
 from textual.containers import Horizontal
@@ -8,6 +12,7 @@ from sqlalchemy.orm import selectinload
 from .widgets import AccountItem, TransactionTable
 from .screens import CreateAccountScreen
 from db import SessionLocal
+from importers.engine import CSVImporter
 from models.finance import Account, Transaction, Currency
 
 class FinViewApp(App):
@@ -98,3 +103,74 @@ class FinViewApp(App):
                 self.notify(f"Error creating account: {e}", severity="error")
 
         self.push_screen(CreateAccountScreen(), handle_result)
+
+    def process_csv_import(self, csv_path: str, account):
+        """Processes the CSV file using the account's mapping spec."""
+        # Expand user path (handle ~/) and check existence
+        csv_path = os.path.expanduser(csv_path)
+        if not os.path.exists(csv_path):
+            self.notify(f"File not found: {csv_path}", severity="error")
+            return
+
+        spec_path = os.path.join("./importers", account.mapping_spec)
+        
+        try:
+            importer = CSVImporter(spec_path)
+            new_txs = []
+            
+            with open(csv_path, mode='r', encoding='utf-8') as f:
+                reader = csv.reader(
+                    f, 
+                    delimiter=importer.config.parser.delimiter
+                )
+                
+                # Skip header rows defined in YAML
+                for _ in range(importer.config.parser.skip_rows):
+                    next(reader)
+
+                for row in reader:
+                    if not row or all(not cell.strip() for cell in row):
+                        continue
+                        
+                    # 1. Parse row via CEL
+                    data = importer.parse_row(row)
+                    
+                    # 2. Convert timestamp to datetime object
+                    ts = data['timestamp']
+                    if isinstance(ts, str):
+                        # Attempt standard formats
+                        try:
+                            ts = datetime.datetime.fromisoformat(ts.replace(' ', 'T'))
+                        except ValueError:
+                            # Fallback if your CEL logic results in YYYY-MM-DD
+                            ts = datetime.datetime.strptime(ts, "%Y-%m-%d")
+
+                    # 3. Create Transaction Model
+                    tx = Transaction(
+                        account_id=account.id,
+                        description=str(data['description']),
+                        original_value=float(data['amount_original']),
+                        original_currency=Currency(data['currency_original']),
+                        value_in_account_currency=float(data['amount_in_account_currency']),
+                        date=ts
+                    )
+                    new_txs.append(tx)
+
+            # 4. Batch add and commit
+            if new_txs:
+                self.db.add_all(new_txs)
+                self.db.commit()
+                self.notify(f"Successfully imported {len(new_txs)} transactions.")
+                
+                # Update UI
+                from .widgets import TransactionTable
+                self.query_one(TransactionTable).update_account(account, self.db)
+                self.refresh_accounts() # Updates balances in sidebar
+            else:
+                self.notify("No transactions found in file.", severity="warning")
+
+        except Exception as e:
+            self.db.rollback()
+            self.notify(f"Import failed: {str(e)}", severity="error")
+            # Log the full error for debugging (visible in terminal)
+            print(f"DEBUG IMPORT ERROR: {e}")

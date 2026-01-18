@@ -1,0 +1,13 @@
+version: "1.0"
+name: Swisscard
+
+parser:
+  delimiter: ","
+  skip_rows: 1
+
+mappings:
+  timestamp: "split(row[0], '.')[2] + '-' + split(row[0], '.')[1] + '-' + split(row[0], '.')[0]"
+  description: "row[2] != '' ? row[2]+' ('+row[1]+')' : row[1]"
+  amount_original: "(row[7] != '' ? double(row[7]) : double(row[5]))*-1.0"
+  currency_original: "row[6] != '' ? row[6] : row[4]"
+  amount_in_account_currency: "double(row[5])*-1.0"

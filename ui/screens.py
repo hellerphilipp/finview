@@ -111,3 +111,23 @@ class CreateAccountScreen(ModalScreen[dict]):
                 "amount": float(self.query_one("#amount").value or 0),
                 "date": datetime.strptime(self.query_one("#date").value, "%Y-%m-%d %H:%M:%S")
             })
+
+class ImportFileDialog(ModalScreen[str]):
+    """A simple modal to input a file path."""
+    CSS = """
+    ImportFileDialog { align: center middle; }
+    #dialog { width: 60; height: auto; background: $surface; border: thick $primary; padding: 1; }
+    """
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Label("Enter absolute path to CSV file:")
+            yield Input(placeholder="/path/to/transactions.csv", id="file_path")
+            with Horizontal():
+                yield Button("Cancel", id="cancel")
+                yield Button("Import", variant="primary", id="submit")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "submit":
+            self.dismiss(self.query_one("#file_path").value)
+        else:
+            self.dismiss(None)
