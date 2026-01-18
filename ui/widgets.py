@@ -25,7 +25,7 @@ class TransactionTable(DataTable):
 
     def on_mount(self):
         self.cursor_type = "row"
-        self.add_columns("Date", "Description", "Amount", "Currency")
+        self.add_columns("Date & Time", "Description", "Amount", "Currency")
 
     def action_focus_sidebar(self):
         self.app.action_focus_sidebar()
@@ -37,7 +37,7 @@ class TransactionTable(DataTable):
         stmt = (
             select(Transaction)
             .where(Transaction.account_id == account.id)
-            .order_by(Transaction.date_str.desc())
+            .order_by(Transaction.date.desc())
             .limit(100) 
         )
         
@@ -45,7 +45,7 @@ class TransactionTable(DataTable):
 
         for tx in transactions:
             self.add_row(
-                tx.date_str, 
+                tx.date.strftime("%Y-%m-%d %H:%M"),
                 tx.description, 
                 f"{tx.original_value:>10.2f}", 
                 tx.original_currency.value
