@@ -2,6 +2,8 @@
 
 FinView is a lightweight, terminal-based personal finance tracker. It allows you to manage accounts, view transaction histories, and import data from various bank CSV exports using a flexible CEL-based mapping system.
 
+![FinView UI](docs/assets/demo_2026-01-18T16_58_01_488862.svg)
+
 ---
 
 ## How to Use
