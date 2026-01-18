@@ -14,15 +14,20 @@ Screen {
     dock: left;
     width: 35;
     background: $panel;
-    border-right: tall $primary; 
+    border-right: tall $primary;
+}
+
+AccountItem {
+    height: 1;
+    padding: 0 1;
+}
+
+AccountItem > Horizontal {
+    height: 1;
 }
 
 .acc-name { width: 60%; }
 .acc-bal { width: 40%; text-align: right; color: $accent; }
-
-AccountItem {
-    padding: 0 1;
-}
 
 #main-content {
     width: 1fr;
