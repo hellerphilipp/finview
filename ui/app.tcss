@@ -1,0 +1,30 @@
+Screen {
+    layers: sidebar main;
+}
+
+#sidebar {
+    dock: left;
+    width: 35;
+    background: $panel;
+    border-right: tall $primary;
+}
+
+#sidebar:focus-within {
+    border-right: tall $accent;
+}
+
+AccountItem {
+    height: 1;
+    padding: 0 1;
+}
+
+AccountItem > Horizontal {
+    height: 1;
+}
+
+.acc-name { width: 60%; }
+.acc-bal { width: 40%; text-align: right; color: $accent; }
+
+#main-content {
+    width: 1fr;
+}
