@@ -1,6 +1,6 @@
-from textual.widgets import Static, ListItem, ListView, DataTable, Label
-from textual.containers import Vertical, Horizontal
-from textual.message import Message
+from textual.widgets import ListItem, DataTable, Label
+from textual.containers import Horizontal
+from textual.binding import Binding
 
 class AccountItem(ListItem):
     """Custom list item to show account name and balance."""
@@ -16,9 +16,22 @@ class AccountItem(ListItem):
 
 class TransactionTable(DataTable):
     """DataTable optimized for transactions."""
+
+    BINDINGS = [
+        Binding("escape", "focus_sidebar", "Sidebar", show=True),
+    ]
+
     def on_mount(self):
         self.cursor_type = "row"
         self.add_columns("Date", "Description", "Amount", "Currency")
+
+    def on_mount(self):
+        self.cursor_type = "row"
+        self.add_columns("Date", "Description", "Amount", "Currency")
+
+    def action_focus_sidebar(self):
+        self.app.action_focus_sidebar()
+        
 
     def update_account(self, account):
         self.clear()

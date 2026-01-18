@@ -17,6 +17,10 @@ Screen {
     border-right: tall $primary;
 }
 
+#sidebar:focus-within {
+    border-right: tall $accent;
+}
+
 AccountItem {
     height: 1;
     padding: 0 1;
@@ -36,15 +40,19 @@ AccountItem > Horizontal {
 
 class FinViewApp(App):
     CSS = CSS
+    # Global bindings (always visible)
     BINDINGS = [
         Binding("q", "quit", "Quit", show=True),
-        Binding("escape", "focus_sidebar", "Sidebar", show=True),
     ]
 
     def compose(self) -> ComposeResult:
         yield Header()
         with Horizontal():
-            yield ListView(id="sidebar")
+            sidebar = ListView(id="sidebar")
+            sidebar.border_title = "Accounts"
+            sidebar.BINDINGS = [Binding("enter", "select", "Select Account", show=True)]
+            
+            yield sidebar
             yield TransactionTable(id="main-content")
         yield Footer()
 
