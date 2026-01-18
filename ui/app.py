@@ -1,5 +1,6 @@
 from textual.app import App, ComposeResult
 from textual.widgets import Header, Footer, ListView
+from textual.containers import Horizontal  # <--- Add this import
 from textual.binding import Binding
 from .widgets import AccountItem, TransactionTable
 from mock import get_mock_data
@@ -13,7 +14,7 @@ Screen {
     dock: left;
     width: 35;
     background: $panel;
-    border-right: vline $primary;
+    border-right: tall $primary; 
 }
 
 .acc-name { width: 60%; }
