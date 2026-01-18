@@ -12,7 +12,7 @@ class AccountItem(ListItem):
     def compose(self):
         # We calculate balance here. Note: In a production app with millions of rows,
         # you'd use a SQL SUM() query instead of sum(list comprehension).
-        balance = sum(t.original_value for t in self.account.transactions)
+        balance = sum(t.value_in_account_currency for t in self.account.transactions)
         yield Horizontal(
             Label(self.account.name, classes="acc-name"),
             Label(f"{balance:.2f} {self.account.currency.value}", classes="acc-bal"),
