@@ -33,6 +33,7 @@ class Transaction(Base):
     original_currency: Mapped[Currency] = mapped_column(SqlEnum(Currency, native_enum=False))
     value_in_account_currency: Mapped[float] = mapped_column(Numeric(10, 2))
     
-    date: Mapped[datetime] = mapped_column(DateTime) 
+    date: Mapped[datetime] = mapped_column(DateTime)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, default=None)
 
     account: Mapped["Account"] = relationship(back_populates="transactions")

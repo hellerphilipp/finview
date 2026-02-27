@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from textual.widgets import ListItem, DataTable, Label
 from textual.containers import Horizontal
 from textual.binding import Binding
@@ -21,35 +23,57 @@ class AccountItem(ListItem):
 class TransactionTable(DataTable):
     BINDINGS = [
         Binding("escape", "focus_sidebar", "Sidebar", show=True),
-        Binding("i", "import_csv", "Import CSV", show=True), # Moved here
+        Binding("i", "import_csv", "Import CSV", show=True),
+        Binding("a", "toggle_reviewed", "Reviewed", show=True),
     ]
 
     def on_mount(self):
         self.cursor_type = "row"
-        self.add_columns("Date & Time", "Description", "Amount", "Currency")
+        self.add_column("Date & Time", key="date")
+        self.add_column("Description", key="description")
+        self.add_column("Amount", key="amount")
+        self.add_column("Currency", key="currency")
+        self.add_column("Reviewed", key="reviewed")
         self.current_account = None
 
     def update_account(self, account, session):
         """Populate table from DB. We use the session to query transactions."""
-        self.current_account = account # Store the account object
+        self.current_account = account
         self.clear()
-        
+
         stmt = (
             select(Transaction)
             .where(Transaction.account_id == account.id)
             .order_by(Transaction.date.desc())
-            .limit(100) 
+            .limit(100)
         )
-        
+
         transactions = session.execute(stmt).scalars().all()
 
         for tx in transactions:
             self.add_row(
                 tx.date.strftime("%Y-%m-%d %H:%M"),
-                tx.description, 
-                f"{tx.original_value:>10.2f}", 
-                tx.original_currency.value
+                tx.description,
+                f"{tx.original_value:>10.2f}",
+                tx.original_currency.value,
+                "Yes" if tx.reviewed_at else "No",
+                key=str(tx.id),
             )
+
+    def action_toggle_reviewed(self):
+        if self.row_count == 0:
+            return
+
+        row_key, _ = self.coordinate_to_cell_key(self.cursor_coordinate)
+        session = self.app.db
+        tx = session.get(Transaction, int(row_key.value))
+        if tx is None:
+            return
+
+        tx.reviewed_at = None if tx.reviewed_at else datetime.now()
+        session.commit()
+
+        self.update_cell(row_key, "reviewed", "Yes" if tx.reviewed_at else "No")
     
     def action_focus_sidebar(self):
         self.app.action_focus_sidebar()
