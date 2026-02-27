@@ -1,10 +1,16 @@
 from datetime import datetime
 
-from textual.widgets import ListItem, DataTable, Label
+from rich.style import Style
+from textual.widgets import ListItem, DataTable, Label, Static
 from textual.containers import Horizontal
 from textual.binding import Binding
 from sqlalchemy import select
 from models.finance import Transaction
+
+REVIEWED_BG = Style(bgcolor="dark_green")
+UNREVIEWED_BG = Style(bgcolor="dark_red")
+
+COLUMN_KEYS = ["date", "description", "amount", "currency", "reviewed"]
 
 class AccountItem(ListItem):
     def __init__(self, account):
@@ -35,11 +41,47 @@ class TransactionTable(DataTable):
         self.add_column("Currency", key="currency")
         self.add_column("Reviewed", key="reviewed")
         self.current_account = None
+        self._row_styles: dict[str, Style] = {}
+
+    def _get_row_style(self, row_index: int, base_style: Style) -> Style:
+        style = super()._get_row_style(row_index, base_style)
+        if row_index < 0:
+            return style
+        row_key = self._row_locations.get_key(row_index)
+        if row_key is not None and row_key.value in self._row_styles:
+            style += self._row_styles[row_key.value]
+        return style
+
+    def _row_cells(self, tx):
+        """Return plain cell values for a transaction."""
+        return (
+            tx.date.strftime("%Y-%m-%d %H:%M"),
+            tx.description,
+            f"{tx.original_value:>10.2f}",
+            tx.original_currency.value,
+            "Yes" if tx.reviewed_at else "No",
+        )
+
+    def _update_banner(self, unreviewed_count):
+        """Update the review banner with the current unreviewed count."""
+        try:
+            banner = self.app.query_one("#review-banner", Static)
+        except Exception:
+            return
+        if unreviewed_count > 0:
+            banner.update(f" {unreviewed_count} unreviewed transaction{'s' if unreviewed_count != 1 else ''} ")
+            banner.add_class("has-unreviewed")
+            banner.remove_class("all-reviewed")
+        else:
+            banner.update(" All transactions reviewed ")
+            banner.add_class("all-reviewed")
+            banner.remove_class("has-unreviewed")
 
     def update_account(self, account, session):
         """Populate table from DB. We use the session to query transactions."""
         self.current_account = account
         self.clear()
+        self._row_styles = {}
 
         stmt = (
             select(Transaction)
@@ -50,15 +92,15 @@ class TransactionTable(DataTable):
 
         transactions = session.execute(stmt).scalars().all()
 
+        self._unreviewed_count = 0
         for tx in transactions:
-            self.add_row(
-                tx.date.strftime("%Y-%m-%d %H:%M"),
-                tx.description,
-                f"{tx.original_value:>10.2f}",
-                tx.original_currency.value,
-                "Yes" if tx.reviewed_at else "No",
-                key=str(tx.id),
-            )
+            key = str(tx.id)
+            self.add_row(*self._row_cells(tx), key=key)
+            self._row_styles[key] = REVIEWED_BG if tx.reviewed_at else UNREVIEWED_BG
+            if not tx.reviewed_at:
+                self._unreviewed_count += 1
+
+        self._update_banner(self._unreviewed_count)
 
     def action_toggle_reviewed(self):
         if self.row_count == 0:
@@ -73,7 +115,12 @@ class TransactionTable(DataTable):
         tx.reviewed_at = None if tx.reviewed_at else datetime.now()
         session.commit()
 
+        self._row_styles[row_key.value] = REVIEWED_BG if tx.reviewed_at else UNREVIEWED_BG
         self.update_cell(row_key, "reviewed", "Yes" if tx.reviewed_at else "No")
+        self._clear_caches()
+
+        self._unreviewed_count += -1 if tx.reviewed_at else 1
+        self._update_banner(self._unreviewed_count)
     
     def action_focus_sidebar(self):
         self.app.action_focus_sidebar()

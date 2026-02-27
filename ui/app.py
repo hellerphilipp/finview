@@ -3,8 +3,8 @@ import datetime
 import csv
 
 from textual.app import App, ComposeResult
-from textual.widgets import Header, Footer, ListView
-from textual.containers import Horizontal
+from textual.widgets import Header, Footer, ListView, Static
+from textual.containers import Horizontal, Vertical
 from textual.binding import Binding
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -51,7 +51,9 @@ class FinViewApp(App):
             sidebar = ListView(id="sidebar")
             sidebar.border_title = "Accounts"
             yield sidebar
-            yield TransactionTable(id="main-content")
+            with Vertical():
+                yield Static("", id="review-banner")
+                yield TransactionTable(id="main-content")
         yield Footer()
 
     def on_list_view_selected(self, message: ListView.Selected):

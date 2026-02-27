@@ -25,6 +25,25 @@ AccountItem > Horizontal {
 .acc-name { width: 60%; }
 .acc-bal { width: 40%; text-align: right; color: $accent; }
 
+#review-banner {
+    width: 1fr;
+    height: 1;
+    text-style: bold;
+    display: none;
+}
+
+#review-banner.has-unreviewed {
+    display: block;
+    background: $warning;
+    color: $text;
+}
+
+#review-banner.all-reviewed {
+    display: block;
+    background: $success;
+    color: $text;
+}
+
 #main-content {
     width: 1fr;
 }
