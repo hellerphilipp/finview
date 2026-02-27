@@ -46,6 +46,7 @@ AccountItem > Horizontal {
 
 #main-content {
     width: 1fr;
+    margin-bottom: 1;
 }
 
 #page-info {
