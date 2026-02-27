@@ -49,7 +49,7 @@ class TransactionTable(DataTable):
     BINDINGS = [
         Binding("escape", "focus_sidebar", "Sidebar", show=True),
         Binding("i", "import_csv", "Import CSV", show=True),
-        Binding("a", "toggle_reviewed", "Reviewed", show=True),
+        Binding("enter", "toggle_reviewed", "Reviewed", show=True),
         Binding("s", "split_transaction", "Split", show=True),
         Binding("n", "next_page", "Next Page", show=True),
         Binding("p", "prev_page", "Prev Page", show=True),
@@ -241,6 +241,18 @@ class TransactionTable(DataTable):
 
         self._total_unreviewed += -1 if tx.reviewed_at else 1
         self._update_banner()
+
+        # Advance to next row, or next page if at the end
+        cursor_row = self.cursor_coordinate.row
+        if cursor_row < self.row_count - 1:
+            self.move_cursor(row=cursor_row + 1)
+        else:
+            # At last row — move to next page if one exists
+            total_pages = max(1, ceil(self._total_count / self.PAGE_SIZE))
+            if self._page < total_pages - 1:
+                self._page += 1
+                self._load_page()
+                self.move_cursor(row=0)
 
     def action_next_page(self):
         total_pages = max(1, ceil(self._total_count / self.PAGE_SIZE))
