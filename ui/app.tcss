@@ -47,3 +47,12 @@ AccountItem > Horizontal {
 #main-content {
     width: 1fr;
 }
+
+#page-info {
+    dock: bottom;
+    width: 1fr;
+    height: 1;
+    text-align: right;
+    color: $text;
+    background: $surface;
+}

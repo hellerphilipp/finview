@@ -9,7 +9,7 @@ from textual.binding import Binding
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from .widgets import AccountItem, TransactionTable
+from .widgets import AccountItem, AllAccountsItem, TransactionTable
 from .screens import CreateAccountScreen
 from db import SessionLocal
 from importers.engine import CSVImporter
@@ -41,9 +41,15 @@ class FinViewApp(App):
         stmt = select(Account).options(selectinload(Account.transactions)).order_by(Account.id)
         accounts = self.db.execute(stmt).scalars().all()
 
+        sidebar.append(AllAccountsItem())
         for acc in accounts:
             sidebar.append(AccountItem(acc))
+        sidebar.index = 0
         sidebar.focus()
+
+        # Auto-load all accounts view
+        table = self.query_one(TransactionTable)
+        table.update_all_accounts(self.db)
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -54,12 +60,15 @@ class FinViewApp(App):
             with Vertical():
                 yield Static("", id="review-banner")
                 yield TransactionTable(id="main-content")
+                yield Static("", id="page-info")
         yield Footer()
 
     def on_list_view_selected(self, message: ListView.Selected):
-        account = message.item.account
         table = self.query_one(TransactionTable)
-        table.update_account(account, self.db)
+        if isinstance(message.item, AllAccountsItem):
+            table.update_all_accounts(self.db)
+        else:
+            table.update_account(message.item.account, self.db)
         table.focus()
 
     def action_refresh(self):
