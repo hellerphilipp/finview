@@ -1,12 +1,13 @@
 import os
 import yaml
+from decimal import Decimal
 from pydantic import ValidationError
 from textual.app import ComposeResult
 from textual.screen import ModalScreen
-from textual.widgets import Label, Input, Button, Select
-from textual.containers import Vertical, Horizontal
+from textual.widgets import Label, Input, Button, Select, Static
+from textual.containers import Vertical, Horizontal, VerticalScroll
 from datetime import datetime
-from models.finance import Currency
+from models.finance import Currency, Transaction
 from importers.schema import ImporterMapping
 
 class CreateAccountScreen(ModalScreen[dict]):
@@ -131,3 +132,222 @@ class ImportFileDialog(ModalScreen[str]):
             self.dismiss(self.query_one("#file_path").value)
         else:
             self.dismiss(None)
+
+
+class SplitTransactionScreen(ModalScreen[list | None]):
+    """Modal for splitting a transaction into multiple child transactions.
+
+    Returns a list of dicts with keys: id (int|None), description (str), amount (float).
+    Returns empty list to unsplit. Returns None on cancel.
+    """
+
+    CSS = """
+    SplitTransactionScreen {
+        align: center middle;
+    }
+
+    #split-dialog {
+        padding: 1 2;
+        width: 75;
+        max-height: 80%;
+        border: thick $background 80%;
+        background: $surface;
+    }
+
+    #split-header {
+        margin-bottom: 1;
+    }
+
+    #split-header Label {
+        margin-bottom: 0;
+    }
+
+    #split-rows {
+        max-height: 40;
+        min-height: 5;
+    }
+
+    .split-row {
+        height: 3;
+        margin-bottom: 1;
+    }
+
+    .split-row Input {
+        margin: 0 1 0 0;
+    }
+
+    .split-desc {
+        width: 2fr;
+    }
+
+    .split-amount {
+        width: 1fr;
+    }
+
+    .split-delete {
+        width: 5;
+        min-width: 5;
+    }
+
+    #unallocated-label {
+        margin-top: 1;
+        text-style: bold;
+    }
+
+    #split-buttons {
+        width: 100%;
+        padding-top: 1;
+        align: center middle;
+    }
+
+    #split-buttons Button {
+        margin: 0 2;
+    }
+
+    #add-row-btn {
+        margin-top: 1;
+    }
+    """
+
+    def __init__(
+        self,
+        transaction: Transaction,
+        existing_children: list[Transaction] | None = None,
+    ):
+        super().__init__()
+        self._transaction = transaction
+        self._existing_children = existing_children or []
+        self._row_counter = 0
+
+    def compose(self) -> ComposeResult:
+        tx = self._transaction
+        with Vertical(id="split-dialog"):
+            with Vertical(id="split-header"):
+                yield Label(f"Split Transaction", id="split-title")
+                yield Label(
+                    f"Date: {tx.date.strftime('%Y-%m-%d %H:%M')}  |  "
+                    f"{tx.description}  |  "
+                    f"{tx.original_value:.2f} {tx.original_currency.value}"
+                )
+
+            rows_container = VerticalScroll(id="split-rows")
+            with rows_container:
+                if self._existing_children:
+                    for child in self._existing_children:
+                        yield self._make_row(
+                            child_id=child.id,
+                            description=child.description,
+                            amount=f"{child.original_value:.2f}",
+                        )
+                else:
+                    yield self._make_row()
+                    yield self._make_row()
+
+            yield Button("+ Add Row", id="add-row-btn", variant="default")
+            yield Label("", id="unallocated-label")
+
+            with Horizontal(id="split-buttons"):
+                yield Button("Cancel", id="cancel")
+                yield Button("Save", variant="primary", id="save", disabled=True)
+
+    def _make_row(
+        self,
+        child_id: int | None = None,
+        description: str = "",
+        amount: str = "",
+    ) -> Horizontal:
+        self._row_counter += 1
+        idx = self._row_counter
+        row = Horizontal(classes="split-row", id=f"split-row-{idx}")
+        row._split_child_id = child_id
+        desc_input = Input(
+            placeholder="Description",
+            value=description,
+            id=f"split-desc-{idx}",
+            classes="split-desc",
+        )
+        amount_input = Input(
+            placeholder="0.00",
+            value=amount,
+            id=f"split-amount-{idx}",
+            classes="split-amount",
+            type="number",
+        )
+        delete_btn = Button("X", id=f"split-del-{idx}", classes="split-delete", variant="error")
+        row.compose_add_child(desc_input)
+        row.compose_add_child(amount_input)
+        row.compose_add_child(delete_btn)
+        return row
+
+    def on_mount(self) -> None:
+        self._update_unallocated()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if "split-amount" in (event.input.id or ""):
+            self._update_unallocated()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        btn_id = event.button.id or ""
+
+        if btn_id == "cancel":
+            self.dismiss(None)
+            return
+
+        if btn_id == "save":
+            self.dismiss(self._collect_splits())
+            return
+
+        if btn_id == "add-row-btn":
+            container = self.query_one("#split-rows", VerticalScroll)
+            new_row = self._make_row()
+            container.mount(new_row)
+            self._update_unallocated()
+            return
+
+        if btn_id.startswith("split-del-"):
+            row_idx = btn_id.replace("split-del-", "")
+            try:
+                row = self.query_one(f"#split-row-{row_idx}", Horizontal)
+                row.remove()
+                self.call_later(self._update_unallocated)
+            except Exception:
+                pass
+
+    def _update_unallocated(self) -> None:
+        total = Decimal(str(self._transaction.original_value))
+        allocated = Decimal("0")
+        rows = self.query(".split-row")
+
+        for row in rows:
+            amount_input = row.query_one(".split-amount", Input)
+            try:
+                allocated += Decimal(amount_input.value or "0")
+            except Exception:
+                pass
+
+        unallocated = total - allocated
+        label = self.query_one("#unallocated-label", Label)
+        label.update(
+            f"Unallocated: {unallocated:.2f} {self._transaction.original_currency.value}"
+        )
+
+        save_btn = self.query_one("#save", Button)
+        row_count = len(rows)
+        # Enable save when fully allocated OR when all rows deleted (unsplit)
+        save_btn.disabled = not (abs(unallocated) < Decimal("0.005") or row_count == 0)
+
+    def _collect_splits(self) -> list[dict]:
+        result = []
+        for row in self.query(".split-row"):
+            desc_input = row.query_one(".split-desc", Input)
+            amount_input = row.query_one(".split-amount", Input)
+            try:
+                amount = float(amount_input.value or "0")
+            except ValueError:
+                amount = 0.0
+            result.append({
+                "id": row._split_child_id,
+                "description": desc_input.value,
+                "amount": amount,
+            })
+        return result

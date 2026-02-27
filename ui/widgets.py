@@ -5,7 +5,9 @@ from rich.style import Style
 from textual.widgets import ListItem, DataTable, Label, Static
 from textual.containers import Horizontal
 from textual.binding import Binding
+from decimal import Decimal
 from sqlalchemy import select, func, case
+from sqlalchemy.orm import selectinload
 from models.finance import Account, Transaction
 
 REVIEWED_BG = Style(bgcolor="dark_green")
@@ -48,6 +50,7 @@ class TransactionTable(DataTable):
         Binding("escape", "focus_sidebar", "Sidebar", show=True),
         Binding("i", "import_csv", "Import CSV", show=True),
         Binding("a", "toggle_reviewed", "Reviewed", show=True),
+        Binding("s", "split_transaction", "Split", show=True),
         Binding("n", "next_page", "Next Page", show=True),
         Binding("p", "prev_page", "Prev Page", show=True),
     ]
@@ -90,8 +93,9 @@ class TransactionTable(DataTable):
         ]
         if account_name is not None:
             cells.append(account_name)
+        desc = f"{tx.description} (split)" if tx.parent_id is not None else tx.description
         cells.extend([
-            tx.description,
+            desc,
             f"{tx.original_value:>10.2f}",
             tx.original_currency.value,
             "Yes" if tx.reviewed_at else "No",
@@ -132,16 +136,26 @@ class TransactionTable(DataTable):
             return None
         return Transaction.account_id == self.current_account.id
 
+    def _parent_ids_subquery(self):
+        """Subquery returning transaction ids that have children (are split parents)."""
+        return (
+            select(Transaction.parent_id)
+            .where(Transaction.parent_id.is_not(None))
+            .distinct()
+            .scalar_subquery()
+        )
+
     def _load_page(self):
         """Load the current page of transactions and update counts from DB."""
         session = self._session
         where = self._base_filter()
+        no_children = ~Transaction.id.in_(self._parent_ids_subquery())
 
         # Count totals
         count_stmt = select(
             func.count(Transaction.id),
             func.sum(case((Transaction.reviewed_at.is_(None), 1), else_=0)),
-        )
+        ).where(no_children)
         if where is not None:
             count_stmt = count_stmt.where(where)
         total_count, total_unreviewed = session.execute(count_stmt).one()
@@ -158,9 +172,10 @@ class TransactionTable(DataTable):
             stmt = (
                 select(Transaction, Account.name)
                 .join(Account, Transaction.account_id == Account.id)
+                .where(no_children)
             )
         else:
-            stmt = select(Transaction)
+            stmt = select(Transaction).where(no_children)
             if where is not None:
                 stmt = stmt.where(where)
 
@@ -262,3 +277,83 @@ class TransactionTable(DataTable):
             self.app.process_csv_import(csv_path, self.current_account)
 
         self.app.push_screen(ImportFileDialog(), handle_import)
+
+    def action_split_transaction(self):
+        if self.row_count == 0:
+            return
+
+        row_key, _ = self.coordinate_to_cell_key(self.cursor_coordinate)
+        session = self._session or self.app.db
+        tx = session.get(Transaction, int(row_key.value))
+        if tx is None:
+            return
+
+        # Navigate to root parent if this is a child
+        root = tx
+        while root.parent_id is not None:
+            root = session.get(Transaction, root.parent_id)
+            if root is None:
+                return
+
+        # Eager-load children
+        root = session.execute(
+            select(Transaction)
+            .where(Transaction.id == root.id)
+            .options(selectinload(Transaction.children))
+        ).scalar_one()
+
+        existing = list(root.children) if root.children else None
+
+        from .screens import SplitTransactionScreen
+
+        def handle_split(splits: list[dict] | None):
+            if splits is None:
+                return
+
+            existing_ids = {c.id for c in (existing or [])}
+            returned_ids = {s["id"] for s in splits if s["id"] is not None}
+
+            # Delete removed children
+            for child in list(root.children):
+                if child.id not in returned_ids:
+                    session.delete(child)
+
+            # Compute proportional ratio
+            if float(root.original_value) != 0:
+                ratio = Decimal(str(root.value_in_account_currency)) / Decimal(
+                    str(root.original_value)
+                )
+            else:
+                ratio = Decimal("1")
+
+            # Update or create children
+            for s in splits:
+                amount = Decimal(str(s["amount"]))
+                acc_amount = float(amount * ratio)
+
+                if s["id"] is not None and s["id"] in existing_ids:
+                    # Update existing child
+                    child = session.get(Transaction, s["id"])
+                    if child:
+                        child.description = s["description"]
+                        child.original_value = float(amount)
+                        child.value_in_account_currency = acc_amount
+                else:
+                    # Create new child
+                    child = Transaction(
+                        account_id=root.account_id,
+                        description=s["description"],
+                        original_value=float(amount),
+                        original_currency=root.original_currency,
+                        value_in_account_currency=acc_amount,
+                        date=root.date,
+                        parent_id=root.id,
+                    )
+                    session.add(child)
+
+            session.commit()
+            self._load_page()
+
+        self.app.push_screen(
+            SplitTransactionScreen(root, existing), handle_split
+        )
