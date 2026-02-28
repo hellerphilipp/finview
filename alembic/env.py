@@ -9,7 +9,6 @@ from alembic import context
 # --- CRITICAL: Add project root to path so 'db' and 'models' can be found ---
 sys.path.insert(0, os.path.realpath(os.path.join(os.path.dirname(__file__), '..')))
 
-from db import DATABASE_URL
 from models.base import Base
 import models.finance  # Ensure models are loaded
 
@@ -19,6 +18,13 @@ config = context.config
 # Interpret the config file for Python logging.
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
+
+# Resolve database URL: prefer FINVIEW_DB env var, fall back to ./db.finview
+_db_path = os.environ.get(
+    "FINVIEW_DB",
+    os.path.join(os.path.realpath(os.path.join(os.path.dirname(__file__), '..')), "db.finview"),
+)
+DATABASE_URL = f"sqlite:///{_db_path}"
 
 # Set this to your Base's metadata
 target_metadata = Base.metadata

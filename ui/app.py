@@ -11,7 +11,7 @@ from sqlalchemy.orm import selectinload
 
 from .widgets import AccountItem, AccountSidebar, AllAccountsItem, TransactionTable
 from .screens import CreateAccountScreen
-from db import SessionLocal
+import db
 from importers.engine import CSVImporter
 from models.finance import Account, Transaction, Currency
 
@@ -24,7 +24,7 @@ class FinViewApp(App):
     ]
 
     def on_mount(self) -> None:
-        self.db = SessionLocal() # Open a long-lived session for the app instance
+        self.db = db.SessionLocal() # Open a long-lived session for the app instance
         self.refresh_accounts()
 
     def on_unmount(self) -> None:
