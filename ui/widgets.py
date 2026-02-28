@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from rich.style import Style
-from textual.widgets import ListItem, DataTable, Label, Static
+from textual.widgets import ListItem, ListView, DataTable, Label, Static
 from textual.containers import Horizontal
 from textual.binding import Binding
 from decimal import Decimal
@@ -21,6 +21,15 @@ BASE_COLUMNS = [
 ]
 
 ACCOUNT_COLUMN = ("Account", "account")
+
+
+class AccountSidebar(ListView):
+    BINDINGS = [
+        Binding("c", "create_account", "New Account", show=True),
+    ]
+
+    def action_create_account(self):
+        self.app.action_create_account()
 
 
 class AllAccountsItem(ListItem):

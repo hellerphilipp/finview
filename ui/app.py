@@ -3,13 +3,13 @@ import datetime
 import csv
 
 from textual.app import App, ComposeResult
-from textual.widgets import Header, Footer, ListView, Static
+from textual.widgets import Header, Footer, Static
 from textual.containers import Horizontal, Vertical
 from textual.binding import Binding
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from .widgets import AccountItem, AllAccountsItem, TransactionTable
+from .widgets import AccountItem, AccountSidebar, AllAccountsItem, TransactionTable
 from .screens import CreateAccountScreen
 from db import SessionLocal
 from importers.engine import CSVImporter
@@ -21,7 +21,6 @@ class FinViewApp(App):
     BINDINGS = [
         Binding("q", "quit", "Quit", show=True),
         Binding("r", "refresh", "Refresh Data", show=True),
-        Binding("c", "create_account", "New Account", show=True),
     ]
 
     def on_mount(self) -> None:
@@ -33,7 +32,7 @@ class FinViewApp(App):
 
     def refresh_accounts(self):
         """Fetch accounts and their transactions from the DB."""
-        sidebar = self.query_one("#sidebar", ListView)
+        sidebar = self.query_one("#sidebar", AccountSidebar)
         sidebar.clear()
         
         # We use selectinload to eagerly load transactions for the balance sum
@@ -54,7 +53,7 @@ class FinViewApp(App):
     def compose(self) -> ComposeResult:
         yield Header()
         with Horizontal():
-            sidebar = ListView(id="sidebar")
+            sidebar = AccountSidebar(id="sidebar")
             sidebar.border_title = "Accounts"
             yield sidebar
             with Vertical():
@@ -63,7 +62,7 @@ class FinViewApp(App):
                 yield Static("", id="page-info")
         yield Footer()
 
-    def on_list_view_selected(self, message: ListView.Selected):
+    def on_list_view_selected(self, message: AccountSidebar.Selected):
         table = self.query_one(TransactionTable)
         if isinstance(message.item, AllAccountsItem):
             table.update_all_accounts(self.db)
