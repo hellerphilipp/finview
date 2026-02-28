@@ -1,18 +1,13 @@
-import os
-import datetime
-import csv
-
 from textual.app import App, ComposeResult
+from textual.css.query import NoMatches
 from textual.widgets import Header, Footer, Static, Input
 from textual.containers import Horizontal, Vertical
 from textual.binding import Binding
-from sqlalchemy import select
-from sqlalchemy.orm import selectinload
 
 from .widgets import AccountItem, AccountSidebar, AllAccountsItem, TransactionTable
 from .screens import CreateAccountScreen, MigrationPromptScreen
 import db
-from importers.engine import CSVImporter
+import queries
 from models.finance import Account, Transaction, Currency
 
 
@@ -49,12 +44,11 @@ class FinViewApp(App):
         sidebar = self.query_one("#sidebar", AccountSidebar)
         sidebar.clear()
 
-        stmt = select(Account).options(selectinload(Account.transactions)).order_by(Account.id)
-        accounts = self.db.execute(stmt).scalars().all()
+        accounts_with_balances = queries.get_all_accounts_with_balances(self.db)
 
         sidebar.append(AllAccountsItem())
-        for acc in accounts:
-            sidebar.append(AccountItem(acc))
+        for acc, balance in accounts_with_balances:
+            sidebar.append(AccountItem(acc, balance=balance))
         sidebar.index = 0
         sidebar.focus()
 
@@ -107,7 +101,7 @@ class FinViewApp(App):
     def on_key(self, event) -> None:
         try:
             cmd_input = self.query_one("#command-input", Input)
-        except Exception:
+        except NoMatches:
             return
         if cmd_input.has_class("visible") and event.key == "escape":
             self._hide_command_input()
@@ -211,62 +205,14 @@ class FinViewApp(App):
 
     def process_csv_import(self, csv_path: str, account):
         """Processes the CSV file using the account's mapping spec."""
-        csv_path = os.path.expanduser(csv_path)
-        if not os.path.exists(csv_path):
-            self.notify(f"File not found: {csv_path}", severity="error")
-            return
-
-        spec_path = os.path.join("./importers", account.mapping_spec)
-
         try:
-            importer = CSVImporter(spec_path)
-            new_txs = []
-
-            with open(csv_path, mode="r", encoding="utf-8") as f:
-                reader = csv.reader(f, delimiter=importer.config.parser.delimiter)
-
-                for _ in range(importer.config.parser.skip_rows):
-                    next(reader)
-
-                for row in reader:
-                    if not row or all(not cell.strip() for cell in row):
-                        continue
-
-                    data = importer.parse_row(row)
-
-                    ts = data["timestamp"]
-                    if isinstance(ts, str):
-                        try:
-                            ts = datetime.datetime.fromisoformat(ts.replace(" ", "T"))
-                        except ValueError:
-                            ts = datetime.datetime.strptime(ts, "%Y-%m-%d")
-
-                    tx = Transaction(
-                        account_id=account.id,
-                        description=str(data["description"]),
-                        original_value=float(data["amount_original"]),
-                        original_currency=Currency(data["currency_original"]),
-                        value_in_account_currency=float(
-                            data["amount_in_account_currency"]
-                        ),
-                        date=ts,
-                    )
-                    new_txs.append(tx)
-
-            if new_txs:
-                self.db.add_all(new_txs)
-                self.db.commit()
-                db.mark_dirty()
-                self.notify(f"Successfully imported {len(new_txs)} transactions.")
-
-                from .widgets import TransactionTable
-
-                self.query_one(TransactionTable).update_account(account, self.db)
-                self.refresh_accounts()
-            else:
-                self.notify("No transactions found in file.", severity="warning")
-
+            count = queries.import_csv_transactions(self.db, csv_path, account)
+            db.mark_dirty()
+            self.notify(f"Successfully imported {count} transactions.")
+            self.query_one(TransactionTable).update_account(account, self.db)
+            self.refresh_accounts()
+        except (FileNotFoundError, ValueError) as e:
+            self.notify(str(e), severity="error")
         except Exception as e:
             self.db.rollback()
             self.notify(f"Import failed: {str(e)}", severity="error")
-            print(f"DEBUG IMPORT ERROR: {e}")

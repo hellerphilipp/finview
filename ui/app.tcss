@@ -69,3 +69,51 @@ AccountItem > Horizontal {
 #command-input.visible {
     display: block;
 }
+
+/* Shared modal styles */
+CreateAccountScreen,
+MigrationPromptScreen,
+ImportFileDialog {
+    align: center middle;
+}
+
+CreateAccountScreen #dialog,
+MigrationPromptScreen #dialog,
+ImportFileDialog #dialog {
+    width: 60;
+    height: auto;
+    background: $surface;
+    border: thick $background 80%;
+    padding: 0 1;
+}
+
+CreateAccountScreen #dialog Label {
+    margin-top: 1;
+    margin-bottom: 1;
+}
+
+.buttons {
+    width: 100%;
+    padding-top: 2;
+    align: center middle;
+}
+
+.buttons Button,
+MigrationPromptScreen Button,
+ImportFileDialog Button {
+    margin: 0 2;
+}
+
+MigrationPromptScreen #dialog {
+    border: thick $warning;
+    padding: 1;
+}
+
+MigrationPromptScreen #dialog Label {
+    margin-bottom: 1;
+}
+
+ImportFileDialog #dialog {
+    border: thick $primary;
+    padding: 1;
+}

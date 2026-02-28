@@ -1,15 +1,16 @@
 import os
-from datetime import datetime
+from decimal import Decimal
 
 from rich.style import Style
+from textual.css.query import NoMatches
 from textual.widgets import ListItem, ListView, DataTable, Label, Static
 from textual.containers import Horizontal
 from textual.binding import Binding
-from decimal import Decimal
-from sqlalchemy import select, func, case
-from sqlalchemy.orm import selectinload
-from models.finance import Account, Transaction
+
+from models.finance import Transaction
+from .screens import ImportFileDialog, SplitTransactionScreen
 import db
+import queries
 
 REVIEWED_BG = Style(bgcolor="dark_green")
 UNREVIEWED_BG = Style(bgcolor="dark_red")
@@ -40,17 +41,15 @@ class AllAccountsItem(ListItem):
 
 
 class AccountItem(ListItem):
-    def __init__(self, account):
+    def __init__(self, account, balance: Decimal = Decimal("0")):
         super().__init__()
         self.account = account
+        self._balance = balance
 
     def compose(self):
-        # We calculate balance here. Note: In a production app with millions of rows,
-        # you'd use a SQL SUM() query instead of sum(list comprehension).
-        balance = sum(t.value_in_account_currency for t in self.account.transactions)
         yield Horizontal(
             Label(self.account.name, classes="acc-name"),
-            Label(f"{balance:.2f} {self.account.currency.value}", classes="acc-bal"),
+            Label(f"{self._balance:.2f} {self.account.currency.value}", classes="acc-bal"),
         )
 
 class TransactionTable(DataTable):
@@ -111,7 +110,7 @@ class TransactionTable(DataTable):
         """Update the review banner and page info."""
         try:
             banner = self.app.query_one("#review-banner", Static)
-        except Exception:
+        except NoMatches:
             return
         if self._total_unreviewed > 0:
             s = "s" if self._total_unreviewed != 1 else ""
@@ -129,7 +128,7 @@ class TransactionTable(DataTable):
         """Update the entry count at the bottom right."""
         try:
             info = self.app.query_one("#page-info", Static)
-        except Exception:
+        except NoMatches:
             return
 
         parts = []
@@ -142,67 +141,27 @@ class TransactionTable(DataTable):
         parts.append(f"Showing {self.row_count} of {self._total_count} entries")
         info.update(" | ".join(parts))
 
-    def _base_filter(self):
-        """Return the WHERE clause for the current mode."""
-        if self._all_accounts_mode:
-            return None
-        return Transaction.account_id == self.current_account.id
-
-    def _parent_ids_subquery(self):
-        """Subquery returning transaction ids that have children (are split parents)."""
-        return (
-            select(Transaction.parent_id)
-            .where(Transaction.parent_id.is_not(None))
-            .distinct()
-            .scalar_subquery()
-        )
-
     def _load_transactions(self):
         """Load all transactions and update counts from DB."""
         session = self._session
-        where = self._base_filter()
-        no_children = ~Transaction.id.in_(self._parent_ids_subquery())
-
-        # Count totals
-        count_stmt = select(
-            func.count(Transaction.id),
-            func.sum(case((Transaction.reviewed_at.is_(None), 1), else_=0)),
-        ).where(no_children)
-        if self._all_accounts_mode:
-            count_stmt = count_stmt.join(Account, Transaction.account_id == Account.id)
-        if where is not None:
-            count_stmt = count_stmt.where(where)
-        total_count, total_unreviewed = session.execute(count_stmt).one()
-        self._total_count = total_count or 0
-        self._total_unreviewed = int(total_unreviewed or 0)
+        account_id = None if self._all_accounts_mode else self.current_account.id
+        total_count, total_unreviewed, rows = queries.load_transaction_page(
+            session, account_id=account_id, all_accounts=self._all_accounts_mode
+        )
+        self._total_count = total_count
+        self._total_unreviewed = total_unreviewed
 
         # Clear rows only, keep columns
         self.clear()
         self._row_styles = {}
 
-        # Fetch all rows
         if self._all_accounts_mode:
-            stmt = (
-                select(Transaction, Account.name)
-                .join(Account, Transaction.account_id == Account.id)
-                .where(no_children)
-            )
-        else:
-            stmt = select(Transaction).where(no_children)
-            if where is not None:
-                stmt = stmt.where(where)
-
-        stmt = stmt.order_by(Transaction.date.desc())
-
-        if self._all_accounts_mode:
-            rows = session.execute(stmt).all()
             for tx, account_name in rows:
                 key = str(tx.id)
                 self.add_row(*self._row_cells(tx, account_name=account_name), key=key)
                 self._row_styles[key] = REVIEWED_BG if tx.reviewed_at else UNREVIEWED_BG
         else:
-            transactions = session.execute(stmt).scalars().all()
-            for tx in transactions:
+            for tx in rows:
                 key = str(tx.id)
                 self.add_row(*self._row_cells(tx), key=key)
                 self._row_styles[key] = REVIEWED_BG if tx.reviewed_at else UNREVIEWED_BG
@@ -231,12 +190,9 @@ class TransactionTable(DataTable):
 
         row_key, _ = self.coordinate_to_cell_key(self.cursor_coordinate)
         session = self._session or self.app.db
-        tx = session.get(Transaction, int(row_key.value))
+        tx = queries.toggle_reviewed(session, int(row_key.value))
         if tx is None:
             return
-
-        tx.reviewed_at = None if tx.reviewed_at else datetime.now()
-        session.commit()
         db.mark_dirty()
 
         self._row_styles[row_key.value] = REVIEWED_BG if tx.reviewed_at else UNREVIEWED_BG
@@ -262,9 +218,6 @@ class TransactionTable(DataTable):
         if not self.current_account.mapping_spec:
             self.notify("This account has no mapping spec!", severity="error")
             return
-
-        # We need the screen class, make sure it's imported in widgets.py
-        from .screens import ImportFileDialog 
 
         def handle_import(csv_path: str | None):
             if not csv_path:
@@ -301,8 +254,6 @@ class TransactionTable(DataTable):
         ).scalar_one()
 
         existing = list(root.children) if root.children else None
-
-        from .screens import SplitTransactionScreen
 
         def handle_split(splits: list[dict] | None):
             if splits is None:

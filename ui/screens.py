@@ -15,35 +15,6 @@ class CreateAccountScreen(ModalScreen[dict]):
     A Modal Screen to create a new account.
     Returns a dictionary with the form data or None if cancelled.
     """
-    
-    CSS = """
-    CreateAccountScreen {
-        align: center middle;
-    }
-
-    #dialog {
-        padding: 0 1;
-        width: 60;
-        height: auto;
-        border: thick $background 80%;
-        background: $surface;
-    }
-    
-    #dialog Label {
-        margin-top: 1;
-        margin-bottom: 1;
-    }
-    
-    .buttons {
-        width: 100%;
-        padding-top: 2;
-        align: center middle;
-    }
-    
-    Button {
-        margin: 0 2;
-    }
-    """
     def get_mapping_options(self) -> list[tuple[str, str | None]]:
         """Scans ./importers, validates YAMLs, and returns list of (Display Name, Path)."""
         base_path = "./importers"
@@ -116,12 +87,6 @@ class CreateAccountScreen(ModalScreen[dict]):
 class MigrationPromptScreen(ModalScreen[bool]):
     """Modal asking whether to apply pending database migrations."""
 
-    CSS = """
-    MigrationPromptScreen { align: center middle; }
-    #dialog { width: 60; height: auto; background: $surface; border: thick $warning; padding: 1; }
-    #dialog Label { margin-bottom: 1; }
-    """
-
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
             yield Label("Pending database migrations detected.")
@@ -136,10 +101,6 @@ class MigrationPromptScreen(ModalScreen[bool]):
 
 class ImportFileDialog(ModalScreen[str]):
     """A simple modal to input a file path."""
-    CSS = """
-    ImportFileDialog { align: center middle; }
-    #dialog { width: 60; height: auto; background: $surface; border: thick $primary; padding: 1; }
-    """
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
             yield Label("Enter absolute path to CSV file:")
@@ -239,6 +200,7 @@ class SplitTransactionScreen(ModalScreen[list | None]):
         self._transaction = transaction
         self._existing_children = existing_children or []
         self._row_counter = 0
+        self._row_child_ids: dict[str, int | None] = {}
 
     def compose(self) -> ComposeResult:
         tx = self._transaction
@@ -294,7 +256,7 @@ class SplitTransactionScreen(ModalScreen[list | None]):
         )
         delete_btn = Button("X", id=f"split-del-{idx}", classes="split-delete", variant="error")
         row = Horizontal(desc_input, amount_input, delete_btn, classes="split-row", id=f"split-row-{idx}")
-        row._split_child_id = child_id
+        self._row_child_ids[f"split-row-{idx}"] = child_id
         return row
 
     def on_mount(self) -> None:
@@ -367,7 +329,7 @@ class SplitTransactionScreen(ModalScreen[list | None]):
             except ValueError:
                 amount = 0.0
             result.append({
-                "id": row._split_child_id,
+                "id": self._row_child_ids.get(row.id),
                 "description": desc_input.value,
                 "amount": amount,
             })

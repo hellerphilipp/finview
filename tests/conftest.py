@@ -1,5 +1,6 @@
 import pytest
 from datetime import datetime
+from decimal import Decimal
 
 import db
 from models.base import Base
@@ -44,25 +45,25 @@ def sample_account(session):
         Transaction(
             account_id=acc.id,
             description="Initial Balance",
-            original_value=1000.00,
+            original_value=Decimal("1000.00"),
             original_currency=Currency.CHF,
-            value_in_account_currency=1000.00,
+            value_in_account_currency=Decimal("1000.00"),
             date=datetime(2025, 1, 1),
         ),
         Transaction(
             account_id=acc.id,
             description="Grocery Store",
-            original_value=-50.00,
+            original_value=Decimal("-50.00"),
             original_currency=Currency.CHF,
-            value_in_account_currency=-50.00,
+            value_in_account_currency=Decimal("-50.00"),
             date=datetime(2025, 1, 5),
         ),
         Transaction(
             account_id=acc.id,
             description="Salary",
-            original_value=3000.00,
+            original_value=Decimal("3000.00"),
             original_currency=Currency.CHF,
-            value_in_account_currency=3000.00,
+            value_in_account_currency=Decimal("3000.00"),
             date=datetime(2025, 1, 15),
             reviewed_at=datetime(2025, 1, 16),
         ),

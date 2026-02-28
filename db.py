@@ -38,13 +38,18 @@ def _stamp_alembic_head():
         conn.commit()
 
 
-def init_memory_db():
-    """Create a fresh in-memory DB with all tables. No file path remembered."""
+def _init_fresh_db(path: str | None = None):
+    """Create a fresh in-memory DB with all tables, optionally remembering a file path."""
     global db_file_path
-    db_file_path = None
+    db_file_path = os.path.abspath(path) if path else None
     _create_memory_engine()
     Base.metadata.create_all(engine)
     _stamp_alembic_head()
+
+
+def init_memory_db():
+    """Create a fresh in-memory DB with all tables. No file path remembered."""
+    _init_fresh_db()
 
 
 def load_db_from_file(path: str):
@@ -56,17 +61,13 @@ def load_db_from_file(path: str):
     # Copy file DB into the in-memory DB
     file_conn = sqlite3.connect(path)
     mem_conn = engine.raw_connection()
-    file_conn.backup(mem_conn.connection)
+    file_conn.backup(mem_conn.driver_connection)
     file_conn.close()
 
 
 def init_new_db(path: str):
     """Create a fresh in-memory DB, remembering path for later :w."""
-    global db_file_path
-    db_file_path = os.path.abspath(path)
-    _create_memory_engine()
-    Base.metadata.create_all(engine)
-    _stamp_alembic_head()
+    _init_fresh_db(path)
 
 
 def save_to_file(path: str | None = None):
@@ -83,7 +84,7 @@ def save_to_file(path: str | None = None):
     mem_conn = engine.raw_connection()
     try:
         swp_conn = sqlite3.connect(swp_path)
-        mem_conn.connection.backup(swp_conn)
+        mem_conn.driver_connection.backup(swp_conn)
         swp_conn.close()
         os.rename(swp_path, target)
     except Exception:

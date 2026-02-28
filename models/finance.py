@@ -1,5 +1,6 @@
 import enum
 from datetime import datetime
+from decimal import Decimal
 from sqlalchemy import String, ForeignKey, Numeric, Enum as SqlEnum, DateTime
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from typing import List
@@ -16,7 +17,7 @@ class Account(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(50), unique=True)
     currency: Mapped[Currency] = mapped_column(SqlEnum(Currency, native_enum=False))
-    mapping_spec: Mapped[str] = mapped_column(String(255), nullable=True)
+    mapping_spec: Mapped[str | None] = mapped_column(String(255))
     
     transactions: Mapped[List["Transaction"]] = relationship(back_populates="account")
 
@@ -29,16 +30,14 @@ class Transaction(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"))
     description: Mapped[str] = mapped_column(String(255))
-    original_value: Mapped[float] = mapped_column(Numeric(10, 2))
+    original_value: Mapped[Decimal] = mapped_column(Numeric(10, 2))
     original_currency: Mapped[Currency] = mapped_column(SqlEnum(Currency, native_enum=False))
-    value_in_account_currency: Mapped[float] = mapped_column(Numeric(10, 2))
+    value_in_account_currency: Mapped[Decimal] = mapped_column(Numeric(10, 2))
     
     date: Mapped[datetime] = mapped_column(DateTime)
-    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, default=None)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime)
 
-    parent_id: Mapped[int | None] = mapped_column(
-        ForeignKey("transactions.id"), nullable=True, default=None
-    )
+    parent_id: Mapped[int | None] = mapped_column(ForeignKey("transactions.id"))
 
     account: Mapped["Account"] = relationship(back_populates="transactions")
     parent: Mapped["Transaction | None"] = relationship(
