@@ -89,6 +89,27 @@ class TestToggleReviewed:
             assert is_reviewed != was_reviewed
 
 
+class TestSplitTransaction:
+    async def test_split_screen_opens(self, sample_account, finview_app):
+        async with finview_app.run_test() as pilot:
+            await pilot.pause()
+            table = pilot.app.query_one(TransactionTable)
+            table.update_account(sample_account, pilot.app.db)
+            await pilot.pause()
+            table.focus()
+            await pilot.pause()
+            table.move_cursor(row=0)
+            await pilot.pause()
+
+            await pilot.press("s")
+            await pilot.pause()
+
+            from ui.screens import SplitTransactionScreen
+
+            assert len(pilot.app.screen_stack) > 1
+            assert isinstance(pilot.app.screen_stack[-1], SplitTransactionScreen)
+
+
 class TestVimNavigation:
     """Tests for vim-style j/k/g/G navigation with count prefixes."""
 

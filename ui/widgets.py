@@ -7,6 +7,8 @@ from textual.widgets import ListItem, ListView, DataTable, Label, Static
 from textual.containers import Horizontal
 from textual.binding import Binding
 
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from models.finance import Transaction
 from .screens import ImportFileDialog, SplitTransactionScreen
 import db
