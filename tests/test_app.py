@@ -2,11 +2,13 @@ import csv
 import os
 import pytest
 from datetime import datetime
+from decimal import Decimal
 
 import db
 from models.finance import Account, Currency, Transaction
 from ui.app import FinViewApp
 from ui.widgets import AccountSidebar, AccountItem, TransactionTable
+from textual.widgets import Input
 
 
 class TestRefreshCycle:
@@ -90,3 +92,166 @@ class TestQuitBehavior:
             await pilot.pause()
             # App should still be running
             assert pilot.app.is_running
+
+
+class TestSearch:
+    @pytest.fixture()
+    def search_account(self, session):
+        """Account with distinct transactions for search testing."""
+        acc = Account(name="Search Test", currency=Currency.CHF)
+        session.add(acc)
+        session.flush()
+        txs = [
+            Transaction(
+                account_id=acc.id,
+                description="Grocery Store",
+                original_value=Decimal("-50.00"),
+                original_currency=Currency.CHF,
+                value_in_account_currency=Decimal("-50.00"),
+                date=datetime(2025, 1, 1),
+            ),
+            Transaction(
+                account_id=acc.id,
+                description="Salary Payment",
+                original_value=Decimal("3000.00"),
+                original_currency=Currency.CHF,
+                value_in_account_currency=Decimal("3000.00"),
+                date=datetime(2025, 1, 2),
+            ),
+            Transaction(
+                account_id=acc.id,
+                description="Grocery Delivery",
+                original_value=Decimal("-30.00"),
+                original_currency=Currency.CHF,
+                value_in_account_currency=Decimal("-30.00"),
+                date=datetime(2025, 1, 3),
+            ),
+            Transaction(
+                account_id=acc.id,
+                description="Rent",
+                original_value=Decimal("-1500.00"),
+                original_currency=Currency.CHF,
+                value_in_account_currency=Decimal("-1500.00"),
+                date=datetime(2025, 1, 4),
+            ),
+        ]
+        session.add_all(txs)
+        session.commit()
+        return acc
+
+    async def test_slash_opens_search_input(self, search_account, finview_app):
+        async with finview_app.run_test() as pilot:
+            await pilot.pause()
+            search_input = pilot.app.query_one("#search-input", Input)
+            assert not search_input.has_class("visible")
+
+            await pilot.press("slash")
+            await pilot.pause()
+            assert search_input.has_class("visible")
+
+    async def test_escape_closes_search_input(self, search_account, finview_app):
+        async with finview_app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("slash")
+            await pilot.pause()
+            search_input = pilot.app.query_one("#search-input", Input)
+            assert search_input.has_class("visible")
+
+            await pilot.press("escape")
+            await pilot.pause()
+            assert not search_input.has_class("visible")
+
+    async def test_search_moves_cursor_to_first_match(self, search_account, finview_app):
+        async with finview_app.run_test() as pilot:
+            await pilot.pause()
+            table = pilot.app.query_one(TransactionTable)
+            # Directly invoke search
+            table.search("Grocery")
+            await pilot.pause()
+            assert len(table._search_matches) == 2
+            assert table._search_index == 0
+            assert table.cursor_coordinate.row == table._search_matches[0]
+
+    async def test_n_moves_to_next_match(self, search_account, finview_app):
+        async with finview_app.run_test() as pilot:
+            await pilot.pause()
+            table = pilot.app.query_one(TransactionTable)
+            table.search("Grocery")
+            await pilot.pause()
+            first_match = table._search_matches[0]
+            second_match = table._search_matches[1]
+
+            table.focus()
+            await pilot.press("n")
+            await pilot.pause()
+            assert table._search_index == 1
+            assert table.cursor_coordinate.row == second_match
+
+    async def test_N_moves_to_previous_match(self, search_account, finview_app):
+        async with finview_app.run_test() as pilot:
+            await pilot.pause()
+            table = pilot.app.query_one(TransactionTable)
+            table.search("Grocery")
+            await pilot.pause()
+
+            # Move to second match
+            table.focus()
+            await pilot.press("n")
+            await pilot.pause()
+            assert table._search_index == 1
+
+            # Move back
+            await pilot.press("N")
+            await pilot.pause()
+            assert table._search_index == 0
+            assert table.cursor_coordinate.row == table._search_matches[0]
+
+    async def test_n_wraps_to_top(self, search_account, finview_app):
+        async with finview_app.run_test() as pilot:
+            await pilot.pause()
+            table = pilot.app.query_one(TransactionTable)
+            table.search("Grocery")
+            await pilot.pause()
+
+            table.focus()
+            # Advance past last match
+            await pilot.press("n")  # index 1
+            await pilot.press("n")  # wraps to 0
+            await pilot.pause()
+            assert table._search_index == 0
+
+    async def test_N_wraps_to_bottom(self, search_account, finview_app):
+        async with finview_app.run_test() as pilot:
+            await pilot.pause()
+            table = pilot.app.query_one(TransactionTable)
+            table.search("Grocery")
+            await pilot.pause()
+
+            table.focus()
+            # Go backwards from first match
+            await pilot.press("N")  # wraps to last
+            await pilot.pause()
+            assert table._search_index == len(table._search_matches) - 1
+
+    async def test_no_matches_notification(self, search_account, finview_app):
+        async with finview_app.run_test(notifications=True) as pilot:
+            await pilot.pause()
+            table = pilot.app.query_one(TransactionTable)
+            table.search("nonexistent_xyz")
+            await pilot.pause()
+            assert len(table._search_matches) == 0
+            assert table._search_term == "nonexistent_xyz"
+
+    async def test_search_clears_on_reload(self, search_account, finview_app):
+        async with finview_app.run_test() as pilot:
+            await pilot.pause()
+            table = pilot.app.query_one(TransactionTable)
+            table.search("Grocery")
+            await pilot.pause()
+            assert table._search_term == "Grocery"
+
+            # Reload clears search
+            table._load_transactions()
+            await pilot.pause()
+            assert table._search_term == ""
+            assert table._search_matches == []

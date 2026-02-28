@@ -73,6 +73,9 @@ class TransactionTable(DataTable):
         self._session = None
         self._count_buffer: str = ""
         self._pending_g: bool = False
+        self._search_term: str = ""
+        self._search_matches: list[int] = []
+        self._search_index: int = -1
         for label, key in BASE_COLUMNS:
             self.add_column(label, key=key)
 
@@ -149,6 +152,13 @@ class TransactionTable(DataTable):
         if db.is_dirty():
             parts.append("[+]")
         parts.append(f"Showing {self.row_count} of {self._total_count} entries")
+        if self._search_term:
+            if self._search_matches:
+                parts.append(
+                    f"/{self._search_term} [{self._search_index + 1}/{len(self._search_matches)}]"
+                )
+            else:
+                parts.append(f"/{self._search_term} [0/0]")
         info.update(" | ".join(parts))
 
     def _load_transactions(self):
@@ -164,6 +174,7 @@ class TransactionTable(DataTable):
         # Clear rows only, keep columns
         self.clear()
         self._row_styles = {}
+        self._clear_search()
 
         if self._all_accounts_mode:
             for i, (tx, account_name) in enumerate(rows, start=1):
@@ -232,6 +243,14 @@ class TransactionTable(DataTable):
             else:
                 self._move_to(self.row_count - 1)
             event.prevent_default()
+        elif key == "n":
+            if self._search_matches:
+                self._search_next()
+            event.prevent_default()
+        elif key == "N":
+            if self._search_matches:
+                self._search_prev()
+            event.prevent_default()
         elif key == "enter" and count is not None:
             self._batch_toggle(count)
             event.prevent_default()
@@ -252,6 +271,56 @@ class TransactionTable(DataTable):
 
     def _move_to_display_line(self, display_num: int):
         self._move_to(display_num - 1)
+
+    # --- Search ---
+
+    def search(self, term: str):
+        """Search all visible rows for term (case-insensitive)."""
+        self._search_term = term
+        self._search_matches = []
+        self._search_index = -1
+        term_lower = term.lower()
+
+        for row_idx in range(self.row_count):
+            row_key = self._row_locations.get_key(row_idx)
+            if row_key is None:
+                continue
+            for col_key in self.columns:
+                cell_value = str(self.get_cell(row_key, col_key))
+                if term_lower in cell_value.lower():
+                    self._search_matches.append(row_idx)
+                    break
+
+        if self._search_matches:
+            self._search_index = 0
+            self._move_to(self._search_matches[0])
+        else:
+            self.app.notify(f"Pattern not found: {term}", severity="warning")
+
+        self._update_page_info()
+
+    def _search_next(self):
+        if not self._search_matches:
+            return
+        self._search_index += 1
+        if self._search_index >= len(self._search_matches):
+            self._search_index = 0
+            self.app.notify("Search wrapped to top")
+        self._move_to(self._search_matches[self._search_index])
+
+    def _search_prev(self):
+        if not self._search_matches:
+            return
+        self._search_index -= 1
+        if self._search_index < 0:
+            self._search_index = len(self._search_matches) - 1
+            self.app.notify("Search wrapped to bottom")
+        self._move_to(self._search_matches[self._search_index])
+
+    def _clear_search(self):
+        self._search_term = ""
+        self._search_matches = []
+        self._search_index = -1
 
     # --- Toggle reviewed ---
 

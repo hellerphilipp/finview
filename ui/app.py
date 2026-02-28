@@ -66,6 +66,7 @@ class FinViewApp(App):
                 yield TransactionTable(id="main-content")
                 yield Static("", id="page-info")
         yield Input(id="command-input")
+        yield Input(id="search-input", placeholder="/")
         yield Footer()
 
     def on_list_view_selected(self, message: AccountSidebar.Selected):
@@ -91,6 +92,14 @@ class FinViewApp(App):
         cmd_input.focus()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "search-input":
+            term = event.input.value.strip()
+            self._hide_search_input()
+            if term:
+                table = self.query_one(TransactionTable)
+                table.search(term)
+                table.focus()
+            return
         if event.input.id != "command-input":
             return
         cmd = event.input.value.strip()
@@ -101,10 +110,29 @@ class FinViewApp(App):
     def on_key(self, event) -> None:
         try:
             cmd_input = self.query_one("#command-input", Input)
+            search_input = self.query_one("#search-input", Input)
         except NoMatches:
             return
+
         if cmd_input.has_class("visible") and event.key == "escape":
             self._hide_command_input()
+            event.prevent_default()
+            event.stop()
+            return
+
+        if search_input.has_class("visible") and event.key == "escape":
+            self._hide_search_input()
+            event.prevent_default()
+            event.stop()
+            return
+
+        # `/` opens search (only when neither input is active)
+        if (
+            event.key == "slash"
+            and not cmd_input.has_class("visible")
+            and not search_input.has_class("visible")
+        ):
+            self._show_search_input()
             event.prevent_default()
             event.stop()
 
@@ -113,6 +141,20 @@ class FinViewApp(App):
         cmd_input.value = ""
         cmd_input.remove_class("visible")
         self.query_one("#sidebar").focus()
+
+    # --- Search Input ---
+
+    def _show_search_input(self):
+        search_input = self.query_one("#search-input", Input)
+        search_input.value = ""
+        search_input.add_class("visible")
+        search_input.focus()
+
+    def _hide_search_input(self):
+        search_input = self.query_one("#search-input", Input)
+        search_input.value = ""
+        search_input.remove_class("visible")
+        self.query_one(TransactionTable).focus()
 
     def _handle_command(self, cmd: str):
         if cmd.startswith(":wq"):
