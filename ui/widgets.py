@@ -16,6 +16,7 @@ REVIEWED_BG = Style(bgcolor="dark_green")
 UNREVIEWED_BG = Style(bgcolor="dark_red")
 
 BASE_COLUMNS = [
+    ("#", "row_num"),
     ("Date & Time", "date"),
     ("Description", "description"),
     ("Amount", "amount"),
@@ -68,6 +69,8 @@ class TransactionTable(DataTable):
         self._total_count = 0
         self._total_unreviewed = 0
         self._session = None
+        self._count_buffer: str = ""
+        self._pending_g: bool = False
         for label, key in BASE_COLUMNS:
             self.add_column(label, key=key)
 
@@ -90,9 +93,10 @@ class TransactionTable(DataTable):
         for label, key in cols:
             self.add_column(label, key=key)
 
-    def _row_cells(self, tx, account_name=None):
+    def _row_cells(self, tx, row_num, account_name=None):
         """Return plain cell values for a transaction."""
         cells = [
+            str(row_num),
             tx.date.strftime("%Y-%m-%d %H:%M"),
         ]
         if account_name is not None:
@@ -132,6 +136,10 @@ class TransactionTable(DataTable):
             return
 
         parts = []
+        if self._count_buffer:
+            parts.append(f"{self._count_buffer}>")
+        elif self._pending_g:
+            parts.append("g>")
         if db.db_file_path:
             parts.append(os.path.basename(db.db_file_path))
         else:
@@ -156,14 +164,14 @@ class TransactionTable(DataTable):
         self._row_styles = {}
 
         if self._all_accounts_mode:
-            for tx, account_name in rows:
+            for i, (tx, account_name) in enumerate(rows, start=1):
                 key = str(tx.id)
-                self.add_row(*self._row_cells(tx, account_name=account_name), key=key)
+                self.add_row(*self._row_cells(tx, i, account_name=account_name), key=key)
                 self._row_styles[key] = REVIEWED_BG if tx.reviewed_at else UNREVIEWED_BG
         else:
-            for tx in rows:
+            for i, tx in enumerate(rows, start=1):
                 key = str(tx.id)
-                self.add_row(*self._row_cells(tx), key=key)
+                self.add_row(*self._row_cells(tx, i), key=key)
                 self._row_styles[key] = REVIEWED_BG if tx.reviewed_at else UNREVIEWED_BG
 
         self._update_banner()
@@ -184,29 +192,102 @@ class TransactionTable(DataTable):
         self._setup_columns(all_accounts=True)
         self._load_transactions()
 
-    def action_toggle_reviewed(self):
-        if self.row_count == 0:
+    # --- Vim-style navigation ---
+
+    def on_key(self, event):
+        key = event.key
+
+        # Accumulate digits into count buffer (0 only in non-leading position)
+        if key in "0123456789" and (self._count_buffer or key != "0"):
+            self._count_buffer += key
+            event.prevent_default()
+            self._update_page_info()
             return
 
-        row_key, _ = self.coordinate_to_cell_key(self.cursor_coordinate)
+        count = int(self._count_buffer) if self._count_buffer else None
+        self._count_buffer = ""
+
+        if key == "j":
+            self._move_relative(count or 1)
+            event.prevent_default()
+        elif key == "k":
+            self._move_relative(-(count or 1))
+            event.prevent_default()
+        elif key == "g":
+            if self._pending_g:
+                self._move_to_display_line(1)
+                self._pending_g = False
+            elif count is not None:
+                self._move_to_display_line(count)
+            else:
+                self._pending_g = True
+                self._update_page_info()
+                return
+            event.prevent_default()
+        elif key == "G":
+            if count is not None:
+                self._move_to_display_line(count)
+            else:
+                self._move_to(self.row_count - 1)
+            event.prevent_default()
+        elif key == "enter" and count is not None:
+            self._batch_toggle(count)
+            event.prevent_default()
+            event.stop()
+
+        self._pending_g = False
+        self._update_page_info()
+
+    def _move_relative(self, delta: int):
+        target = self.cursor_coordinate.row + delta
+        self._move_to(target)
+
+    def _move_to(self, row: int):
+        if self.row_count == 0:
+            return
+        row = max(0, min(row, self.row_count - 1))
+        self.move_cursor(row=row)
+
+    def _move_to_display_line(self, display_num: int):
+        self._move_to(display_num - 1)
+
+    # --- Toggle reviewed ---
+
+    def _toggle_row_at(self, row_index: int):
+        """Toggle reviewed status on a specific row. Returns True if toggled."""
+        if row_index < 0 or row_index >= self.row_count:
+            return False
+        row_key = self._row_locations.get_key(row_index)
+        if row_key is None:
+            return False
         session = self._session or self.app.db
         tx = queries.toggle_reviewed(session, int(row_key.value))
         if tx is None:
-            return
+            return False
         db.mark_dirty()
-
         self._row_styles[row_key.value] = REVIEWED_BG if tx.reviewed_at else UNREVIEWED_BG
         self.update_cell(row_key, "reviewed", "Yes" if tx.reviewed_at else "No")
         self._clear_caches()
-
         self._total_unreviewed += -1 if tx.reviewed_at else 1
+        return True
+
+    def _batch_toggle(self, count: int):
+        """Toggle reviewed status on count consecutive rows, stopping at end."""
+        start = self.cursor_coordinate.row
+        end = min(start + count, self.row_count)
+        for row_idx in range(start, end):
+            self._toggle_row_at(row_idx)
+        # Move cursor to last toggled row
+        self.move_cursor(row=end - 1)
         self._update_banner()
 
-        # Advance to next row
-        cursor_row = self.cursor_coordinate.row
-        if cursor_row < self.row_count - 1:
-            self.move_cursor(row=cursor_row + 1)
-    
+    def action_toggle_reviewed(self):
+        row = self.cursor_coordinate.row
+        if self._toggle_row_at(row):
+            self._update_banner()
+            if row < self.row_count - 1:
+                self.move_cursor(row=row + 1)
+
     def action_focus_sidebar(self):
         self.app.action_focus_sidebar()
 

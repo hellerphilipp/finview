@@ -89,6 +89,186 @@ class TestToggleReviewed:
             assert is_reviewed != was_reviewed
 
 
+class TestVimNavigation:
+    """Tests for vim-style j/k/g/G navigation with count prefixes."""
+
+    async def _setup_table(self, pilot, account):
+        """Focus table in single-account mode and return it."""
+        await pilot.pause()
+        table = pilot.app.query_one(TransactionTable)
+        table.update_account(account, pilot.app.db)
+        await pilot.pause()
+        table.focus()
+        await pilot.pause()
+        table.move_cursor(row=0)
+        await pilot.pause()
+        return table
+
+    async def test_j_moves_down(self, account_with_10_txs, finview_app):
+        async with finview_app.run_test() as pilot:
+            table = await self._setup_table(pilot, account_with_10_txs)
+            assert table.cursor_coordinate.row == 0
+            await pilot.press("j")
+            await pilot.pause()
+            assert table.cursor_coordinate.row == 1
+
+    async def test_k_moves_up(self, account_with_10_txs, finview_app):
+        async with finview_app.run_test() as pilot:
+            table = await self._setup_table(pilot, account_with_10_txs)
+            table.move_cursor(row=5)
+            await pilot.pause()
+            await pilot.press("k")
+            await pilot.pause()
+            assert table.cursor_coordinate.row == 4
+
+    async def test_count_j_moves_down_n(self, account_with_10_txs, finview_app):
+        async with finview_app.run_test() as pilot:
+            table = await self._setup_table(pilot, account_with_10_txs)
+            await pilot.press("5")
+            await pilot.press("j")
+            await pilot.pause()
+            assert table.cursor_coordinate.row == 5
+
+    async def test_count_j_clamps_at_end(self, account_with_10_txs, finview_app):
+        async with finview_app.run_test() as pilot:
+            table = await self._setup_table(pilot, account_with_10_txs)
+            table.move_cursor(row=8)
+            await pilot.pause()
+            await pilot.press("5")
+            await pilot.press("j")
+            await pilot.pause()
+            assert table.cursor_coordinate.row == 9
+
+    async def test_count_k_moves_up_n(self, account_with_10_txs, finview_app):
+        async with finview_app.run_test() as pilot:
+            table = await self._setup_table(pilot, account_with_10_txs)
+            table.move_cursor(row=7)
+            await pilot.pause()
+            await pilot.press("3")
+            await pilot.press("k")
+            await pilot.pause()
+            assert table.cursor_coordinate.row == 4
+
+    async def test_count_k_clamps_at_start(self, account_with_10_txs, finview_app):
+        async with finview_app.run_test() as pilot:
+            table = await self._setup_table(pilot, account_with_10_txs)
+            table.move_cursor(row=2)
+            await pilot.pause()
+            await pilot.press("5")
+            await pilot.press("k")
+            await pilot.pause()
+            assert table.cursor_coordinate.row == 0
+
+    async def test_gg_jumps_to_first_row(self, account_with_10_txs, finview_app):
+        async with finview_app.run_test() as pilot:
+            table = await self._setup_table(pilot, account_with_10_txs)
+            table.move_cursor(row=7)
+            await pilot.pause()
+            await pilot.press("g")
+            await pilot.press("g")
+            await pilot.pause()
+            assert table.cursor_coordinate.row == 0
+
+    async def test_G_jumps_to_last_row(self, account_with_10_txs, finview_app):
+        async with finview_app.run_test() as pilot:
+            table = await self._setup_table(pilot, account_with_10_txs)
+            await pilot.press("G")
+            await pilot.pause()
+            assert table.cursor_coordinate.row == 9
+
+    async def test_number_g_jumps_to_display_line(self, account_with_10_txs, finview_app):
+        async with finview_app.run_test() as pilot:
+            table = await self._setup_table(pilot, account_with_10_txs)
+            # 3g should go to display line 3 (row index 2)
+            await pilot.press("3")
+            await pilot.press("g")
+            await pilot.pause()
+            assert table.cursor_coordinate.row == 2
+
+    async def test_number_G_jumps_to_display_line(self, account_with_10_txs, finview_app):
+        async with finview_app.run_test() as pilot:
+            table = await self._setup_table(pilot, account_with_10_txs)
+            await pilot.press("5")
+            await pilot.press("G")
+            await pilot.pause()
+            assert table.cursor_coordinate.row == 4
+
+    async def test_count_resets_after_motion(self, account_with_10_txs, finview_app):
+        async with finview_app.run_test() as pilot:
+            table = await self._setup_table(pilot, account_with_10_txs)
+            # 3j then j should move 3+1=4 total
+            await pilot.press("3")
+            await pilot.press("j")
+            await pilot.pause()
+            assert table.cursor_coordinate.row == 3
+            await pilot.press("j")
+            await pilot.pause()
+            assert table.cursor_coordinate.row == 4
+
+    async def test_count_discards_on_unrelated_key(self, account_with_10_txs, finview_app):
+        async with finview_app.run_test() as pilot:
+            table = await self._setup_table(pilot, account_with_10_txs)
+            # Type 5 then some unrelated key, then j should move by 1
+            await pilot.press("5")
+            await pilot.press("x")  # not a vim motion
+            await pilot.pause()
+            await pilot.press("j")
+            await pilot.pause()
+            assert table.cursor_coordinate.row == 1
+
+    async def test_pending_g_shown_in_page_info(self, account_with_10_txs, finview_app):
+        async with finview_app.run_test() as pilot:
+            table = await self._setup_table(pilot, account_with_10_txs)
+            await pilot.press("g")
+            await pilot.pause()
+            from textual.widgets import Static
+            info = pilot.app.query_one("#page-info", Static)
+            assert "g>" in info.renderable
+
+    async def test_count_shown_in_page_info(self, account_with_10_txs, finview_app):
+        async with finview_app.run_test() as pilot:
+            table = await self._setup_table(pilot, account_with_10_txs)
+            await pilot.press("5")
+            await pilot.pause()
+            from textual.widgets import Static
+            info = pilot.app.query_one("#page-info", Static)
+            assert "5>" in info.renderable
+
+    async def test_batch_toggle(self, account_with_10_txs, finview_app):
+        async with finview_app.run_test() as pilot:
+            table = await self._setup_table(pilot, account_with_10_txs)
+            # All start unreviewed; batch-toggle 3
+            await pilot.press("3")
+            await pilot.press("enter")
+            await pilot.pause()
+            # Check first 3 rows are now reviewed
+            for row_idx in range(3):
+                row_key = table._row_locations.get_key(row_idx)
+                tx = pilot.app.db.get(Transaction, int(row_key.value))
+                pilot.app.db.refresh(tx)
+                assert tx.reviewed_at is not None, f"Row {row_idx} should be reviewed"
+            # Row 3 should still be unreviewed
+            row_key = table._row_locations.get_key(3)
+            tx = pilot.app.db.get(Transaction, int(row_key.value))
+            pilot.app.db.refresh(tx)
+            assert tx.reviewed_at is None
+
+    async def test_batch_toggle_stops_at_end(self, account_with_10_txs, finview_app):
+        async with finview_app.run_test() as pilot:
+            table = await self._setup_table(pilot, account_with_10_txs)
+            table.move_cursor(row=8)
+            await pilot.pause()
+            # Try to toggle 5 from row 8 (only 2 remaining: 8, 9)
+            await pilot.press("5")
+            await pilot.press("enter")
+            await pilot.pause()
+            for row_idx in [8, 9]:
+                row_key = table._row_locations.get_key(row_idx)
+                tx = pilot.app.db.get(Transaction, int(row_key.value))
+                pilot.app.db.refresh(tx)
+                assert tx.reviewed_at is not None
+
+
 class TestCommandMode:
     async def test_save_command(self, finview_app, tmp_path):
         save_path = str(tmp_path / "cmd_save.db")

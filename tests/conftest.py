@@ -74,6 +74,28 @@ def sample_account(session):
 
 
 @pytest.fixture()
+def account_with_10_txs(session):
+    """Create an account with 10 transactions for navigation tests."""
+    acc = Account(name="Nav Test", currency=Currency.CHF)
+    session.add(acc)
+    session.flush()
+
+    for i in range(1, 11):
+        session.add(
+            Transaction(
+                account_id=acc.id,
+                description=f"Transaction {i}",
+                original_value=Decimal(str(i * 10)),
+                original_currency=Currency.CHF,
+                value_in_account_currency=Decimal(str(i * 10)),
+                date=datetime(2025, 1, i),
+            )
+        )
+    session.commit()
+    return acc
+
+
+@pytest.fixture()
 def finview_app(memory_db):
     """Return a FinViewApp instance ready for run_test()."""
     from ui.app import FinViewApp
