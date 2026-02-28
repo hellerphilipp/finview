@@ -1,5 +1,4 @@
 from datetime import datetime
-from math import ceil
 
 from rich.style import Style
 from textual.widgets import ListItem, DataTable, Label, Static
@@ -44,15 +43,11 @@ class AccountItem(ListItem):
         )
 
 class TransactionTable(DataTable):
-    PAGE_SIZE = 100
-
     BINDINGS = [
         Binding("escape", "focus_sidebar", "Sidebar", show=True),
         Binding("i", "import_csv", "Import CSV", show=True),
         Binding("enter", "toggle_reviewed", "Reviewed", show=True),
         Binding("s", "split_transaction", "Split", show=True),
-        Binding("n", "next_page", "Next Page", show=True),
-        Binding("p", "prev_page", "Prev Page", show=True),
     ]
 
     def on_mount(self):
@@ -60,7 +55,6 @@ class TransactionTable(DataTable):
         self.current_account = None
         self._all_accounts_mode = False
         self._row_styles: dict[str, Style] = {}
-        self._page = 0
         self._total_count = 0
         self._total_unreviewed = 0
         self._session = None
@@ -121,14 +115,12 @@ class TransactionTable(DataTable):
         self._update_page_info()
 
     def _update_page_info(self):
-        """Update the page indicator at the bottom right."""
+        """Update the entry count at the bottom right."""
         try:
             info = self.app.query_one("#page-info", Static)
         except Exception:
             return
-        total_pages = max(1, ceil(self._total_count / self.PAGE_SIZE))
-        showing = self.row_count
-        info.update(f"Page {self._page + 1}/{total_pages} showing {showing} of {self._total_count} entries")
+        info.update(f"Showing {self.row_count} of {self._total_count} entries")
 
     def _base_filter(self):
         """Return the WHERE clause for the current mode."""
@@ -145,8 +137,8 @@ class TransactionTable(DataTable):
             .scalar_subquery()
         )
 
-    def _load_page(self):
-        """Load the current page of transactions and update counts from DB."""
+    def _load_transactions(self):
+        """Load all transactions and update counts from DB."""
         session = self._session
         where = self._base_filter()
         no_children = ~Transaction.id.in_(self._parent_ids_subquery())
@@ -156,18 +148,19 @@ class TransactionTable(DataTable):
             func.count(Transaction.id),
             func.sum(case((Transaction.reviewed_at.is_(None), 1), else_=0)),
         ).where(no_children)
+        if self._all_accounts_mode:
+            count_stmt = count_stmt.join(Account, Transaction.account_id == Account.id)
         if where is not None:
             count_stmt = count_stmt.where(where)
         total_count, total_unreviewed = session.execute(count_stmt).one()
         self._total_count = total_count or 0
         self._total_unreviewed = int(total_unreviewed or 0)
 
-        # Clamp page
-        total_pages = max(1, ceil(self._total_count / self.PAGE_SIZE))
-        if self._page >= total_pages:
-            self._page = total_pages - 1
+        # Clear rows only, keep columns
+        self.clear()
+        self._row_styles = {}
 
-        # Fetch page rows
+        # Fetch all rows
         if self._all_accounts_mode:
             stmt = (
                 select(Transaction, Account.name)
@@ -179,15 +172,7 @@ class TransactionTable(DataTable):
             if where is not None:
                 stmt = stmt.where(where)
 
-        stmt = (
-            stmt.order_by(Transaction.date.desc())
-            .offset(self._page * self.PAGE_SIZE)
-            .limit(self.PAGE_SIZE)
-        )
-
-        # Clear rows only, keep columns
-        self.clear()
-        self._row_styles = {}
+        stmt = stmt.order_by(Transaction.date.desc())
 
         if self._all_accounts_mode:
             rows = session.execute(stmt).all()
@@ -208,19 +193,17 @@ class TransactionTable(DataTable):
         """Populate table with a single account's transactions."""
         self.current_account = account
         self._all_accounts_mode = False
-        self._page = 0
         self._session = session
         self._setup_columns(all_accounts=False)
-        self._load_page()
+        self._load_transactions()
 
     def update_all_accounts(self, session):
         """Populate table with transactions from all accounts."""
         self.current_account = None
         self._all_accounts_mode = True
-        self._page = 0
         self._session = session
         self._setup_columns(all_accounts=True)
-        self._load_page()
+        self._load_transactions()
 
     def action_toggle_reviewed(self):
         if self.row_count == 0:
@@ -242,28 +225,10 @@ class TransactionTable(DataTable):
         self._total_unreviewed += -1 if tx.reviewed_at else 1
         self._update_banner()
 
-        # Advance to next row, or next page if at the end
+        # Advance to next row
         cursor_row = self.cursor_coordinate.row
         if cursor_row < self.row_count - 1:
             self.move_cursor(row=cursor_row + 1)
-        else:
-            # At last row — move to next page if one exists
-            total_pages = max(1, ceil(self._total_count / self.PAGE_SIZE))
-            if self._page < total_pages - 1:
-                self._page += 1
-                self._load_page()
-                self.move_cursor(row=0)
-
-    def action_next_page(self):
-        total_pages = max(1, ceil(self._total_count / self.PAGE_SIZE))
-        if self._page < total_pages - 1:
-            self._page += 1
-            self._load_page()
-
-    def action_prev_page(self):
-        if self._page > 0:
-            self._page -= 1
-            self._load_page()
     
     def action_focus_sidebar(self):
         self.app.action_focus_sidebar()
@@ -364,7 +329,7 @@ class TransactionTable(DataTable):
                     session.add(child)
 
             session.commit()
-            self._load_page()
+            self._load_transactions()
 
         self.app.push_screen(
             SplitTransactionScreen(root, existing), handle_split
