@@ -38,11 +38,23 @@ class Transaction(Base):
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime)
 
     parent_id: Mapped[int | None] = mapped_column(ForeignKey("transactions.id"))
+    merge_parent_id: Mapped[int | None] = mapped_column(
+        ForeignKey("transactions.id", ondelete="SET NULL")
+    )
 
     account: Mapped["Account"] = relationship(back_populates="transactions")
     parent: Mapped["Transaction | None"] = relationship(
-        "Transaction", remote_side=[id], back_populates="children"
+        "Transaction", remote_side=[id], foreign_keys=[parent_id], back_populates="children"
     )
     children: Mapped[List["Transaction"]] = relationship(
-        "Transaction", back_populates="parent", cascade="all, delete-orphan"
+        "Transaction", back_populates="parent", cascade="all, delete-orphan",
+        foreign_keys="[Transaction.parent_id]"
+    )
+    merge_parent: Mapped["Transaction | None"] = relationship(
+        "Transaction", remote_side=[id], foreign_keys=[merge_parent_id],
+        back_populates="merge_children"
+    )
+    merge_children: Mapped[List["Transaction"]] = relationship(
+        "Transaction", back_populates="merge_parent",
+        foreign_keys="[Transaction.merge_parent_id]"
     )

@@ -64,6 +64,11 @@ alembic revision --autogenerate -m "description"
 alembic upgrade head
 ```
 
+## Change Checklist
+
+* **README**: If a change affects anything documented in the README (features, key bindings, setup instructions, etc.), update the README to reflect it.
+* **Tests**: All new features and behavioral changes must include corresponding tests.
+
 ## Key Conventions
 
 * **SQLite Compatibility**: Always use `batch_op` in Alembic migrations to handle SQLite's limited `ALTER TABLE` support. Use non-native enums (VARCHAR storage).

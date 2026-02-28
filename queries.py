@@ -4,17 +4,21 @@ import os
 from decimal import Decimal
 
 from sqlalchemy import select, func, case
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from importers.engine import CSVImporter
 from models.finance import Account, Currency, Transaction
 
 
 def get_all_accounts_with_balances(session: Session) -> list[tuple[Account, Decimal]]:
-    """Return all accounts with their computed balance via SQL SUM()."""
+    """Return all accounts with their computed balance via SQL SUM().
+
+    Excludes merge parents (virtual transactions) from the balance sum.
+    """
     stmt = (
         select(Account, func.coalesce(func.sum(Transaction.value_in_account_currency), 0))
         .outerjoin(Transaction, Account.id == Transaction.account_id)
+        .where(~Transaction.id.in_(_merge_parent_ids_subquery()) | Transaction.id.is_(None))
         .group_by(Account.id)
         .order_by(Account.id)
     )
@@ -31,6 +35,53 @@ def _parent_ids_subquery():
     )
 
 
+def _merge_parent_ids_subquery():
+    """Subquery returning transaction ids that are merge parents."""
+    return (
+        select(Transaction.merge_parent_id)
+        .where(Transaction.merge_parent_id.is_not(None))
+        .distinct()
+        .scalar_subquery()
+    )
+
+
+def _merge_net_subquery():
+    """Scalar subquery that computes the net total of a merge group.
+
+    Returns the sum of value_in_account_currency for all transactions sharing
+    the same merge_parent_id as the outer transaction.
+    """
+    MergeSibling = Transaction.__table__.alias("merge_sibling")
+    return (
+        select(func.sum(MergeSibling.c.value_in_account_currency))
+        .where(MergeSibling.c.merge_parent_id == Transaction.merge_parent_id)
+        .correlate(Transaction.__table__)
+        .scalar_subquery()
+    )
+
+
+def _merge_parent_reviewed_subquery():
+    """Scalar subquery returning the merge parent's reviewed_at for a child."""
+    MergeParent = Transaction.__table__.alias("merge_parent")
+    return (
+        select(MergeParent.c.reviewed_at)
+        .where(MergeParent.c.id == Transaction.merge_parent_id)
+        .correlate(Transaction.__table__)
+        .scalar_subquery()
+    )
+
+
+def _merge_parent_desc_subquery():
+    """Scalar subquery returning the merge parent's description for a child."""
+    MergeParent = Transaction.__table__.alias("merge_parent_desc")
+    return (
+        select(MergeParent.c.description)
+        .where(MergeParent.c.id == Transaction.merge_parent_id)
+        .correlate(Transaction.__table__)
+        .scalar_subquery()
+    )
+
+
 def load_transaction_page(
     session: Session,
     account_id: int | None = None,
@@ -38,18 +89,27 @@ def load_transaction_page(
 ) -> tuple[int, int, list]:
     """Load transactions and counts.
 
-    Returns (total_count, total_unreviewed, rows) where rows is a list of
-    Transaction (single account) or (Transaction, account_name) tuples (all accounts).
+    Returns (total_count, total_unreviewed, rows).
+
+    For counting: merge children are excluded, merge parents are counted as 1.
+    For display: merge children are included (with merge metadata), merge parents
+    are excluded from normal rows but returned for all-accounts grouping.
+
+    Rows are:
+    - Single account: list of tuples (Transaction, merge_net|None, merge_reviewed|None, merge_group_name|None)
+    - All accounts: list of tuples (Transaction, account_name, merge_net|None, merge_reviewed|None, merge_group_name|None)
     """
-    no_children = ~Transaction.id.in_(_parent_ids_subquery())
+    no_split_parent = ~Transaction.id.in_(_parent_ids_subquery())
+    no_merge_parent = ~Transaction.id.in_(_merge_parent_ids_subquery())
+    is_not_merge_child = Transaction.merge_parent_id.is_(None)
 
     where = None if all_accounts else (Transaction.account_id == account_id)
 
-    # Count totals
+    # Count totals: exclude merge children, include merge parents as 1 each
     count_stmt = select(
         func.count(Transaction.id),
         func.sum(case((Transaction.reviewed_at.is_(None), 1), else_=0)),
-    ).where(no_children)
+    ).where(no_split_parent).where(is_not_merge_child)
     if all_accounts:
         count_stmt = count_stmt.join(Account, Transaction.account_id == Account.id)
     if where is not None:
@@ -58,26 +118,261 @@ def load_transaction_page(
     total_count = total_count or 0
     total_unreviewed = int(total_unreviewed or 0)
 
-    # Fetch rows
+    # Subquery labels for merge metadata
+    merge_net = _merge_net_subquery().label("merge_net")
+    merge_reviewed = _merge_parent_reviewed_subquery().label("merge_reviewed")
+    merge_group_name = _merge_parent_desc_subquery().label("merge_group_name")
+
+    # Fetch rows: exclude split parents and merge parents, but include merge children
     if all_accounts:
         stmt = (
-            select(Transaction, Account.name)
+            select(Transaction, Account.name, merge_net, merge_reviewed, merge_group_name)
             .join(Account, Transaction.account_id == Account.id)
-            .where(no_children)
+            .where(no_split_parent)
+            .where(no_merge_parent)
         )
     else:
-        stmt = select(Transaction).where(no_children)
+        stmt = (
+            select(Transaction, merge_net, merge_reviewed, merge_group_name)
+            .where(no_split_parent)
+            .where(no_merge_parent)
+        )
         if where is not None:
             stmt = stmt.where(where)
 
     stmt = stmt.order_by(Transaction.date.desc())
+    rows = session.execute(stmt).all()
 
     if all_accounts:
-        rows = session.execute(stmt).all()
-    else:
-        rows = session.execute(stmt).scalars().all()
+        rows = _group_merge_children_all_accounts(session, rows)
 
     return total_count, total_unreviewed, rows
+
+
+def _group_merge_children_all_accounts(session, rows):
+    """Post-process All Accounts rows to group merge children under their parent.
+
+    Inserts merge parent header rows and reorders children beneath them
+    at the earliest child's position.
+    """
+    # Separate merge children from normal rows
+    normal_rows = []
+    merge_groups = {}  # merge_parent_id -> list of row tuples
+
+    for row in rows:
+        tx = row[0]
+        if tx.merge_parent_id is not None:
+            merge_groups.setdefault(tx.merge_parent_id, []).append(row)
+        else:
+            normal_rows.append(row)
+
+    if not merge_groups:
+        return rows
+
+    # Load merge parents
+    parent_ids = list(merge_groups.keys())
+    parents = {
+        p.id: p
+        for p in session.execute(
+            select(Transaction).where(Transaction.id.in_(parent_ids))
+        ).scalars().all()
+    }
+
+    # Build result: insert group at earliest child's date position
+    result = list(normal_rows)
+
+    for parent_id, children in merge_groups.items():
+        parent = parents.get(parent_id)
+        if parent is None:
+            result.extend(children)
+            continue
+
+        # Find earliest child date for positioning
+        earliest_date = min(c[0].date for c in children)
+
+        # Find insertion point: after the last row with date >= earliest_date
+        insert_idx = len(result)
+        for i, r in enumerate(result):
+            if r[0].date < earliest_date:
+                insert_idx = i
+                break
+
+        # Compute net and get account currency
+        net = sum(Decimal(str(c[0].value_in_account_currency)) for c in children)
+        first_child = children[0][0]
+        account_currency = first_child.original_currency.value
+
+        # Insert parent header row: (parent_tx, "–", net, reviewed, group_name)
+        # We mark this as a "header" by using the parent transaction
+        header_row = (parent, "–", float(net), parent.reviewed_at, parent.description)
+
+        # Sort children by date
+        children.sort(key=lambda c: c[0].date)
+
+        # Insert header + children at position
+        result.insert(insert_idx, header_row)
+        for j, child in enumerate(children):
+            result.insert(insert_idx + 1 + j, child)
+
+    return result
+
+
+# --- Merge operations ---
+
+
+def create_merge(session: Session, tx_ids: list[int], name: str) -> Transaction:
+    """Create a merge group from the given transaction IDs.
+
+    Creates a virtual parent Transaction and sets merge_parent_id on all children.
+    Validates same account currency and no existing merge group membership.
+    """
+    txs = []
+    for tx_id in tx_ids:
+        tx = session.execute(
+            select(Transaction)
+            .where(Transaction.id == tx_id)
+            .options(selectinload(Transaction.account))
+        ).scalar_one_or_none()
+        if tx is None:
+            raise ValueError(f"Transaction {tx_id} not found")
+        txs.append(tx)
+
+    # Validate: none already in a merge group
+    for tx in txs:
+        if tx.merge_parent_id is not None:
+            raise ValueError(f"Transaction '{tx.description}' is already in a merge group")
+
+    # Validate: none are merge parents
+    existing_parent_ids = set(
+        session.execute(
+            select(Transaction.merge_parent_id)
+            .where(Transaction.merge_parent_id.in_(tx_ids))
+        ).scalars().all()
+    )
+    for tx in txs:
+        if tx.id in existing_parent_ids:
+            raise ValueError(f"Transaction '{tx.description}' is a merge parent")
+
+    # Validate: same account currency
+    currencies = {tx.account.currency for tx in txs}
+    if len(currencies) > 1:
+        raise ValueError("Cannot merge transactions from accounts with different currencies")
+
+    # Create virtual parent
+    account_currency = txs[0].account.currency
+    net = sum(Decimal(str(tx.value_in_account_currency)) for tx in txs)
+    earliest_date = min(tx.date for tx in txs)
+
+    parent = Transaction(
+        account_id=txs[0].account_id,
+        description=name,
+        original_value=float(net),
+        original_currency=account_currency,
+        value_in_account_currency=float(net),
+        date=earliest_date,
+    )
+    session.add(parent)
+    session.flush()  # Get parent.id
+
+    for tx in txs:
+        tx.merge_parent_id = parent.id
+
+    session.commit()
+    return parent
+
+
+def add_to_merge(session: Session, merge_parent_id: int, tx_id: int) -> None:
+    """Add a transaction to an existing merge group."""
+    parent = session.get(Transaction, merge_parent_id)
+    if parent is None:
+        raise ValueError("Merge parent not found")
+
+    tx = session.execute(
+        select(Transaction)
+        .where(Transaction.id == tx_id)
+        .options(selectinload(Transaction.account))
+    ).scalar_one_or_none()
+    if tx is None:
+        raise ValueError("Transaction not found")
+
+    if tx.merge_parent_id is not None:
+        raise ValueError("Transaction is already in a merge group")
+
+    # Validate currency match
+    parent_account = session.get(Account, parent.account_id)
+    if tx.account.currency != parent_account.currency:
+        raise ValueError("Cannot merge transactions from accounts with different currencies")
+
+    tx.merge_parent_id = merge_parent_id
+    _update_merge_parent(session, parent)
+    session.commit()
+
+
+def remove_from_merge(session: Session, tx_id: int) -> str | None:
+    """Remove a transaction from its merge group.
+
+    Returns the dissolved group's name if the group was auto-dissolved, else None.
+    """
+    tx = session.get(Transaction, tx_id)
+    if tx is None or tx.merge_parent_id is None:
+        return None
+
+    parent_id = tx.merge_parent_id
+    parent = session.get(Transaction, parent_id)
+    tx.merge_parent_id = None
+
+    # Count remaining children
+    remaining = session.execute(
+        select(func.count(Transaction.id))
+        .where(Transaction.merge_parent_id == parent_id)
+        .where(Transaction.id != tx_id)
+    ).scalar() or 0
+
+    if remaining <= 1:
+        # Dissolve: clear remaining child's FK and delete parent
+        dissolved_name = parent.description if parent else None
+        session.execute(
+            Transaction.__table__.update()
+            .where(Transaction.__table__.c.merge_parent_id == parent_id)
+            .values(merge_parent_id=None)
+        )
+        if parent:
+            session.delete(parent)
+        session.commit()
+        return dissolved_name
+
+    # Update parent totals
+    if parent:
+        _update_merge_parent(session, parent)
+    session.commit()
+    return None
+
+
+def rename_merge(session: Session, merge_parent_id: int, new_name: str) -> None:
+    """Rename a merge group."""
+    parent = session.get(Transaction, merge_parent_id)
+    if parent is None:
+        raise ValueError("Merge parent not found")
+    parent.description = new_name
+    session.commit()
+
+
+def _update_merge_parent(session: Session, parent: Transaction) -> None:
+    """Recompute a merge parent's amounts and date from its children."""
+    children = session.execute(
+        select(Transaction).where(Transaction.merge_parent_id == parent.id)
+    ).scalars().all()
+
+    if not children:
+        return
+
+    net = sum(Decimal(str(c.value_in_account_currency)) for c in children)
+    parent.original_value = float(net)
+    parent.value_in_account_currency = float(net)
+    parent.date = min(c.date for c in children)
+
+
+# --- Existing functions ---
 
 
 def toggle_reviewed(session: Session, tx_id: int) -> Transaction | None:
