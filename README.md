@@ -30,6 +30,18 @@ python main.py
 
 ---
 
+## Testing
+
+Run the test suite with:
+
+```bash
+python -m pytest tests/ -v
+```
+
+Tests cover all layers: domain models, the CSV importer engine, the database layer, and headless TUI tests using Textual's `run_test()` framework. They use an in-memory SQLite database so no files or external setup are needed.
+
+---
+
 ## Mapping YAMLs
 
 FinView uses YAML files that describe how rows from your bank's CSV map to the internal database format. These files use [**CEL (Common Expression Language)**](https://cel.dev) to define the logic

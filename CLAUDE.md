@@ -74,3 +74,30 @@ alembic upgrade head
 * **Dynamic Widget Mounting**: When building composite widgets dynamically (after initial compose), pass children to the constructor (e.g. `Horizontal(child1, child2)`) instead of using `compose_add_child()`, which only works during the compose phase. When querying children of a dynamically mounted widget, guard with try/except since children may not be in the DOM yet.
 * **App-Level Event Handlers + Modals**: `on_key` and other app-level handlers fire even when a modal screen is active, but `query_one()` for main-screen widgets will raise `NoMatches` because modals have their own DOM. Always guard such queries with `try/except`.
 * **Dock Layering**: A `dock: left` sidebar spans the full height and covers `dock: bottom` widgets. For full-width elements (like a command input) between main content and Footer, use normal flow positioning instead of `dock: bottom`.
+
+## Testing
+
+Tests **must be run after every change** to catch regressions.
+
+```bash
+# Run full test suite
+python -m pytest tests/ -v
+
+# Run specific layer
+python -m pytest tests/test_models.py -v
+python -m pytest tests/test_importers.py -v
+python -m pytest tests/test_db.py -v
+python -m pytest tests/test_widgets.py -v
+python -m pytest tests/test_app.py -v
+```
+
+### Test Structure
+
+* `tests/conftest.py` — Shared fixtures: in-memory DB, session, sample account, app instance
+* `tests/test_models.py` — Domain models: relationships, constraints, enums
+* `tests/test_importers.py` — CSV importer engine + Pydantic schema validation
+* `tests/test_db.py` — Database layer: dirty flag, save/load roundtrip
+* `tests/test_widgets.py` — Headless TUI tests using Textual's `run_test()`
+* `tests/test_app.py` — Integration tests: refresh cycle, CSV import end-to-end, quit behavior
+
+Tests use an in-memory SQLite DB (`Base.metadata.create_all()`) without Alembic to keep them fast and self-contained.

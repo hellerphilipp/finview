@@ -1,0 +1,80 @@
+import pytest
+from datetime import datetime
+
+import db
+from models.base import Base
+from models.finance import Account, Currency, Transaction
+
+
+@pytest.fixture()
+def memory_db():
+    """Set up a fresh in-memory SQLite DB, bypassing Alembic stamp."""
+    db._create_memory_engine()
+    Base.metadata.create_all(db.engine)
+    db._dirty = False
+    db.db_file_path = None
+
+    yield db.engine
+
+    # Teardown: reset module-level state
+    if db.engine:
+        db.engine.dispose()
+    db.engine = None
+    db.SessionLocal = None
+    db._dirty = False
+    db.db_file_path = None
+
+
+@pytest.fixture()
+def session(memory_db):
+    """Provide a fresh SQLAlchemy session, closed on teardown."""
+    s = db.SessionLocal()
+    yield s
+    s.close()
+
+
+@pytest.fixture()
+def sample_account(session):
+    """Create an account with a few transactions for reuse."""
+    acc = Account(name="Test Checking", currency=Currency.CHF)
+    session.add(acc)
+    session.flush()
+
+    txs = [
+        Transaction(
+            account_id=acc.id,
+            description="Initial Balance",
+            original_value=1000.00,
+            original_currency=Currency.CHF,
+            value_in_account_currency=1000.00,
+            date=datetime(2025, 1, 1),
+        ),
+        Transaction(
+            account_id=acc.id,
+            description="Grocery Store",
+            original_value=-50.00,
+            original_currency=Currency.CHF,
+            value_in_account_currency=-50.00,
+            date=datetime(2025, 1, 5),
+        ),
+        Transaction(
+            account_id=acc.id,
+            description="Salary",
+            original_value=3000.00,
+            original_currency=Currency.CHF,
+            value_in_account_currency=3000.00,
+            date=datetime(2025, 1, 15),
+            reviewed_at=datetime(2025, 1, 16),
+        ),
+    ]
+    session.add_all(txs)
+    session.commit()
+    return acc
+
+
+@pytest.fixture()
+def finview_app(memory_db):
+    """Return a FinViewApp instance ready for run_test()."""
+    from ui.app import FinViewApp
+
+    return FinViewApp()
