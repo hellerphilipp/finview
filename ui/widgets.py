@@ -1,3 +1,4 @@
+import os
 from datetime import datetime
 
 from rich.style import Style
@@ -8,6 +9,7 @@ from decimal import Decimal
 from sqlalchemy import select, func, case
 from sqlalchemy.orm import selectinload
 from models.finance import Account, Transaction
+import db
 
 REVIEWED_BG = Style(bgcolor="dark_green")
 UNREVIEWED_BG = Style(bgcolor="dark_red")
@@ -129,7 +131,16 @@ class TransactionTable(DataTable):
             info = self.app.query_one("#page-info", Static)
         except Exception:
             return
-        info.update(f"Showing {self.row_count} of {self._total_count} entries")
+
+        parts = []
+        if db.db_file_path:
+            parts.append(os.path.basename(db.db_file_path))
+        else:
+            parts.append("[No File]")
+        if db.is_dirty():
+            parts.append("[+]")
+        parts.append(f"Showing {self.row_count} of {self._total_count} entries")
+        info.update(" | ".join(parts))
 
     def _base_filter(self):
         """Return the WHERE clause for the current mode."""
@@ -226,6 +237,7 @@ class TransactionTable(DataTable):
 
         tx.reviewed_at = None if tx.reviewed_at else datetime.now()
         session.commit()
+        db.mark_dirty()
 
         self._row_styles[row_key.value] = REVIEWED_BG if tx.reviewed_at else UNREVIEWED_BG
         self.update_cell(row_key, "reviewed", "Yes" if tx.reviewed_at else "No")
@@ -338,6 +350,7 @@ class TransactionTable(DataTable):
                     session.add(child)
 
             session.commit()
+            db.mark_dirty()
             self._load_transactions()
 
         self.app.push_screen(
