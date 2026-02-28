@@ -71,3 +71,4 @@ alembic upgrade head
 * **Formatting**: Use `black` for formatting and `isort` for imports.
 * **DataTable Keys**: Always pass explicit `key=` to `add_row()` and `add_column()` to get stable, value-based keys (see MEMORY.md for details).
 * **Session Management**: The app uses a long-lived SQLAlchemy session opened on mount. Use eager loading (`selectinload`) to avoid `LazyInitializationError`.
+* **Dynamic Widget Mounting**: When building composite widgets dynamically (after initial compose), pass children to the constructor (e.g. `Horizontal(child1, child2)`) instead of using `compose_add_child()`, which only works during the compose phase. When querying children of a dynamically mounted widget, guard with try/except since children may not be in the DOM yet.

@@ -258,8 +258,6 @@ class SplitTransactionScreen(ModalScreen[list | None]):
     ) -> Horizontal:
         self._row_counter += 1
         idx = self._row_counter
-        row = Horizontal(classes="split-row", id=f"split-row-{idx}")
-        row._split_child_id = child_id
         desc_input = Input(
             placeholder="Description",
             value=description,
@@ -274,9 +272,8 @@ class SplitTransactionScreen(ModalScreen[list | None]):
             type="number",
         )
         delete_btn = Button("X", id=f"split-del-{idx}", classes="split-delete", variant="error")
-        row.compose_add_child(desc_input)
-        row.compose_add_child(amount_input)
-        row.compose_add_child(delete_btn)
+        row = Horizontal(desc_input, amount_input, delete_btn, classes="split-row", id=f"split-row-{idx}")
+        row._split_child_id = child_id
         return row
 
     def on_mount(self) -> None:
@@ -301,7 +298,7 @@ class SplitTransactionScreen(ModalScreen[list | None]):
             container = self.query_one("#split-rows", VerticalScroll)
             new_row = self._make_row()
             container.mount(new_row)
-            self._update_unallocated()
+            self.call_later(self._update_unallocated)
             return
 
         if btn_id.startswith("split-del-"):
@@ -319,7 +316,10 @@ class SplitTransactionScreen(ModalScreen[list | None]):
         rows = self.query(".split-row")
 
         for row in rows:
-            amount_input = row.query_one(".split-amount", Input)
+            try:
+                amount_input = row.query_one(".split-amount", Input)
+            except Exception:
+                continue
             try:
                 allocated += Decimal(amount_input.value or "0")
             except Exception:
