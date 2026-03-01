@@ -230,17 +230,18 @@ class TransactionTable(DataTable):
         return next_tx.merge_parent_id != tx.merge_parent_id
 
     def _is_last_merge_child_single(self, rows, idx):
-        """Check if the row at idx is the last merge child (single-account mode)."""
+        """Check if the row at idx is the last merge child (single-account mode).
+
+        Now that children are grouped contiguously after their header,
+        we just check the next row.
+        """
         tx = rows[idx][0]
         if tx.merge_parent_id is None:
             return False
-        # In single-account mode, merge children may not be grouped contiguously.
-        # Check if there's another child with the same parent after this one.
-        parent_id = tx.merge_parent_id
-        for j in range(idx + 1, len(rows)):
-            if rows[j][0].merge_parent_id == parent_id:
-                return False
-        return True
+        if idx + 1 >= len(rows):
+            return True
+        next_tx = rows[idx + 1][0]
+        return next_tx.merge_parent_id != tx.merge_parent_id
 
     def _load_transactions(self):
         """Load all transactions and update counts from DB."""
@@ -298,27 +299,47 @@ class TransactionTable(DataTable):
                     else:
                         self._row_styles[key] = REVIEWED_BG if tx.reviewed_at else UNREVIEWED_BG
         else:
+            # Build set of merge parent IDs so we can detect header rows
+            merge_parent_ids = set()
+            for row in rows:
+                tx = row[0]
+                if tx.merge_parent_id is not None:
+                    merge_parent_ids.add(tx.merge_parent_id)
+
             for i, row in enumerate(rows, start=1):
                 tx = row[0]
                 merge_net = row[1]
                 merge_reviewed = row[2]
                 merge_group_name = row[3]
                 is_cross_account = bool(row[4]) if row[4] else False
-                key = str(tx.id)
-                is_last = self._is_last_merge_child_single(rows, i - 1)
-                cells = self._row_cells(tx, i, merge_net=merge_net,
-                                       merge_reviewed=merge_reviewed,
-                                       merge_group_name=merge_group_name,
-                                       is_last_merge_child=is_last,
-                                       is_cross_account_merge=is_cross_account)
-                self.add_row(*cells, key=key)
-                if tx.merge_parent_id is not None and not is_cross_account:
-                    # Same-account merge children: gray text, no background
-                    self._row_styles[key] = MERGE_CHILD_STYLE
-                    self._merge_child_rows.add(key)
-                    self._merge_child_to_parent[key] = tx.merge_parent_id
-                else:
+
+                # Check if this is a merge header row (parent tx inserted by grouping)
+                is_header = tx.id in merge_parent_ids and tx.merge_parent_id is None
+
+                if is_header:
+                    key = f"{MERGE_HEADER_KEY_PREFIX}{tx.id}"
+                    net = merge_net if merge_net is not None else 0
+                    currency = tx.original_currency.value
+                    cells = self._merge_header_cells(tx, i, net, currency)
+                    self.add_row(*cells, key=key)
                     self._row_styles[key] = REVIEWED_BG if tx.reviewed_at else UNREVIEWED_BG
+                    self._merge_header_rows.add(key)
+                else:
+                    key = str(tx.id)
+                    is_last = self._is_last_merge_child_single(rows, i - 1)
+                    cells = self._row_cells(tx, i, merge_net=merge_net,
+                                           merge_reviewed=merge_reviewed,
+                                           merge_group_name=merge_group_name,
+                                           is_last_merge_child=is_last,
+                                           is_cross_account_merge=is_cross_account)
+                    self.add_row(*cells, key=key)
+                    if tx.merge_parent_id is not None and not is_cross_account:
+                        # Same-account merge children: gray text, no background
+                        self._row_styles[key] = MERGE_CHILD_STYLE
+                        self._merge_child_rows.add(key)
+                        self._merge_child_to_parent[key] = tx.merge_parent_id
+                    else:
+                        self._row_styles[key] = REVIEWED_BG if tx.reviewed_at else UNREVIEWED_BG
 
         self._update_banner()
 

@@ -163,6 +163,8 @@ def load_transaction_page(
 
     if all_accounts:
         rows = _group_merge_children_all_accounts(session, rows)
+    else:
+        rows = _group_merge_children_single_account(session, rows)
 
     return total_count, total_unreviewed, rows
 
@@ -228,6 +230,77 @@ def _group_merge_children_all_accounts(session, rows):
         children.sort(key=lambda c: c[0].date)
 
         # Insert header + children at position
+        result.insert(insert_idx, header_row)
+        for j, child in enumerate(children):
+            result.insert(insert_idx + 1 + j, child)
+
+    return result
+
+
+def _group_merge_children_single_account(session, rows):
+    """Post-process single-account rows to group same-account merge children under their parent.
+
+    Inserts merge parent header rows and reorders children beneath them
+    at the earliest child's position.  Cross-account merge children are
+    left in place (they display with an [m+] suffix instead of tree chars).
+
+    Each row is (Transaction, merge_net, merge_reviewed, merge_group_name, is_cross_account).
+    Header rows use the same shape with sentinel values so the widget can detect them.
+    """
+    # Separate same-account merge children from everything else
+    normal_rows = []
+    merge_groups = {}  # merge_parent_id -> list of row tuples
+
+    for row in rows:
+        tx = row[0]
+        is_cross_account = bool(row[4]) if row[4] else False
+        if tx.merge_parent_id is not None and not is_cross_account:
+            merge_groups.setdefault(tx.merge_parent_id, []).append(row)
+        else:
+            normal_rows.append(row)
+
+    if not merge_groups:
+        return rows
+
+    # Load merge parents
+    parent_ids = list(merge_groups.keys())
+    parents = {
+        p.id: p
+        for p in session.execute(
+            select(Transaction).where(Transaction.id.in_(parent_ids))
+        ).scalars().all()
+    }
+
+    result = list(normal_rows)
+
+    for parent_id, children in merge_groups.items():
+        parent = parents.get(parent_id)
+        if parent is None:
+            result.extend(children)
+            continue
+
+        # Find earliest child date for positioning
+        earliest_date = min(c[0].date for c in children)
+
+        # Find insertion point: after the last row with date >= earliest_date
+        insert_idx = len(result)
+        for i, r in enumerate(result):
+            if r[0].date < earliest_date:
+                insert_idx = i
+                break
+
+        # Compute net
+        net = sum(Decimal(str(c[0].value_in_account_currency)) for c in children)
+
+        # Header row: use same tuple shape as single-account rows
+        # (Transaction, merge_net, merge_reviewed, merge_group_name, is_cross_account)
+        # We mark the account_name as "–" via a special flag that the widget detects
+        # by checking if the tx is a merge parent (id in merge_parent_ids)
+        header_row = (parent, float(net), parent.reviewed_at, parent.description, False)
+
+        # Sort children by date
+        children.sort(key=lambda c: c[0].date)
+
         result.insert(insert_idx, header_row)
         for j, child in enumerate(children):
             result.insert(insert_idx + 1 + j, child)

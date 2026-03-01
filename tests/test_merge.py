@@ -242,15 +242,19 @@ class TestLoadTransactionPageWithMerge:
 
     def test_merge_children_shown_in_single_account(self, same_account_txs, session):
         acc, tx1, tx2, tx3 = same_account_txs
-        queries.create_merge(session, [tx1.id, tx2.id], "Group")
+        parent = queries.create_merge(session, [tx1.id, tx2.id], "Group")
 
         _, _, rows = queries.load_transaction_page(session, account_id=acc.id)
-        # Should show: tx3 (normal) + tx1, tx2 (merge children) = 3
-        # Merge parent is excluded from display
-        tx_ids = {r[0].id for r in rows}
+        # Should show: header + tx1, tx2 (merge children) + tx3 (normal) = 4
+        assert len(rows) == 4
+        tx_ids = [r[0].id for r in rows]
         assert tx1.id in tx_ids
         assert tx2.id in tx_ids
         assert tx3.id in tx_ids
+        # Header row should be the merge parent, placed before its children
+        header_idx = tx_ids.index(parent.id)
+        child_indices = [tx_ids.index(tx1.id), tx_ids.index(tx2.id)]
+        assert all(header_idx < ci for ci in child_indices)
 
     def test_merge_net_returned(self, same_account_txs, session):
         acc, tx1, tx2, tx3 = same_account_txs
