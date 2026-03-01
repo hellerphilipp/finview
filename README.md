@@ -88,4 +88,6 @@ mappings:
 
 ## License
 
-This project is licensed under the **GPL v3 License**
+Copyright (C) 2026 Philipp Heller
+
+This program is free software: you can redistribute it and/or modify it under the terms of the **GNU General Public License v3** as published by the Free Software Foundation. This program is distributed **without any warranty**; see [LICENSE.md](LICENSE.md) for the full license text.
