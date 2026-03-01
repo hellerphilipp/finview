@@ -5,7 +5,7 @@ from textual.containers import Horizontal, Vertical
 from textual.binding import Binding
 
 from .widgets import AccountItem, AccountSidebar, AllAccountsItem, TransactionTable
-from .screens import CreateAccountScreen, MigrationPromptScreen
+from .screens import CreateAccountScreen
 import db
 import queries
 from models.finance import Account, Transaction, Currency
@@ -19,22 +19,9 @@ class FinViewApp(App):
         Binding("colon", "show_command_line", "Command", show=False),
     ]
 
-    pending_migrations = False
-
     def on_mount(self) -> None:
         self.db = db.SessionLocal()
         self.refresh_accounts()
-
-        if self.pending_migrations:
-            def handle_migration(apply: bool):
-                if apply:
-                    db.run_migrations()
-                    self.notify("Migrations applied successfully.")
-                    self.refresh_accounts()
-                else:
-                    self.notify("Migrations skipped. Some features may not work.", severity="warning")
-
-            self.push_screen(MigrationPromptScreen(), handle_migration)
 
     def on_unmount(self) -> None:
         self.db.close()

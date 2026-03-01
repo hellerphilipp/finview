@@ -84,20 +84,6 @@ class CreateAccountScreen(ModalScreen[dict]):
                 "date": datetime.strptime(self.query_one("#date").value, "%Y-%m-%d %H:%M:%S")
             })
 
-class MigrationPromptScreen(ModalScreen[bool]):
-    """Modal asking whether to apply pending database migrations."""
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="dialog"):
-            yield Label("Pending database migrations detected.")
-            yield Label("Apply migrations now? (Required to use this database)")
-            with Horizontal():
-                yield Button("Cancel", id="cancel")
-                yield Button("Apply", variant="warning", id="apply")
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        self.dismiss(event.button.id == "apply")
-
 
 class ImportFileDialog(ModalScreen[str]):
     """A simple modal to input a file path."""

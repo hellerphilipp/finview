@@ -84,7 +84,6 @@ AccountItem > Horizontal {
 
 /* Shared modal styles */
 CreateAccountScreen,
-MigrationPromptScreen,
 ImportFileDialog,
 MergeTransactionScreen,
 MergeActionScreen {
@@ -92,7 +91,6 @@ MergeActionScreen {
 }
 
 CreateAccountScreen #dialog,
-MigrationPromptScreen #dialog,
 ImportFileDialog #dialog {
     width: 60;
     height: auto;
@@ -113,19 +111,10 @@ CreateAccountScreen #dialog Label {
 }
 
 .buttons Button,
-MigrationPromptScreen Button,
 ImportFileDialog Button {
     margin: 0 2;
 }
 
-MigrationPromptScreen #dialog {
-    border: thick $warning;
-    padding: 1;
-}
-
-MigrationPromptScreen #dialog Label {
-    margin-bottom: 1;
-}
 
 ImportFileDialog #dialog {
     border: thick $primary;
