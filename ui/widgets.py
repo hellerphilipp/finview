@@ -125,7 +125,7 @@ class TransactionTable(DataTable):
         # Build description with merge/split prefixes
         desc = tx.description
         if tx.parent_id is not None:
-            desc = f"{desc} (split)"
+            desc = f"{desc} [s]"
         if tx.merge_parent_id is not None:
             if is_cross_account_merge:
                 # Cross-account merge child in single-account view: show (m+) suffix
