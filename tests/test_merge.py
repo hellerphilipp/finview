@@ -485,3 +485,97 @@ class TestMergeWidget:
 
             pilot.app.db.refresh(tx)
             assert tx.reviewed_at == was_reviewed  # unchanged
+
+    async def test_m_on_group_child_adds_pending_tx(self, same_account_txs, merge_app):
+        """Earmark an outside tx, then press m on a merge child → adds to group."""
+        async with merge_app.run_test(notifications=True) as pilot:
+            await pilot.pause()
+            acc, tx1, tx2, tx3 = same_account_txs
+
+            # Create a merge group with tx1 and tx2
+            queries.create_merge(pilot.app.db, [tx1.id, tx2.id], "Test Group")
+
+            table = pilot.app.query_one(TransactionTable)
+            table.update_account(acc, pilot.app.db)
+            await pilot.pause()
+            table.focus()
+            await pilot.pause()
+
+            # Find the ungrouped tx3 row and earmark it
+            for row_idx in range(table.row_count):
+                row_key = table._row_locations.get_key(row_idx)
+                if row_key and row_key.value == str(tx3.id):
+                    table.move_cursor(row=row_idx)
+                    break
+            await pilot.pause()
+
+            await pilot.press("m")
+            await pilot.pause()
+            assert table._merge_pending_tx_id == tx3.id
+
+            # Navigate to a merge child row and press m
+            for row_idx in range(table.row_count):
+                row_key = table._row_locations.get_key(row_idx)
+                if row_key and row_key.value in table._merge_child_rows:
+                    table.move_cursor(row=row_idx)
+                    break
+            await pilot.pause()
+
+            await pilot.press("m")
+            await pilot.pause()
+
+            # tx3 should now be part of the merge group, no modal opened
+            assert len(pilot.app.screen_stack) == 1
+            refreshed_tx3 = pilot.app.db.get(Transaction, tx3.id)
+            assert refreshed_tx3.merge_parent_id is not None
+            assert table._merge_pending_tx_id is None
+
+    async def test_m_on_group_header_adds_pending_tx(self, same_account_txs, merge_app):
+        """Earmark an outside tx, then press m on a merge header → adds to group.
+
+        Uses all-accounts mode because merge header rows only exist there.
+        """
+        async with merge_app.run_test(notifications=True) as pilot:
+            await pilot.pause()
+            acc, tx1, tx2, tx3 = same_account_txs
+
+            # Create a merge group with tx1 and tx2
+            queries.create_merge(pilot.app.db, [tx1.id, tx2.id], "Test Group")
+
+            table = pilot.app.query_one(TransactionTable)
+            table.update_all_accounts(pilot.app.db)
+            await pilot.pause()
+            table.focus()
+            await pilot.pause()
+
+            # Verify header rows exist in all-accounts mode
+            assert len(table._merge_header_rows) > 0
+
+            # Find the ungrouped tx3 row and earmark it
+            for row_idx in range(table.row_count):
+                row_key = table._row_locations.get_key(row_idx)
+                if row_key and row_key.value == str(tx3.id):
+                    table.move_cursor(row=row_idx)
+                    break
+            await pilot.pause()
+
+            await pilot.press("m")
+            await pilot.pause()
+            assert table._merge_pending_tx_id == tx3.id
+
+            # Navigate to the merge header row and press m
+            for row_idx in range(table.row_count):
+                row_key = table._row_locations.get_key(row_idx)
+                if row_key and row_key.value in table._merge_header_rows:
+                    table.move_cursor(row=row_idx)
+                    break
+            await pilot.pause()
+
+            await pilot.press("m")
+            await pilot.pause()
+
+            # tx3 should now be part of the merge group, no modal opened
+            assert len(pilot.app.screen_stack) == 1
+            refreshed_tx3 = pilot.app.db.get(Transaction, tx3.id)
+            assert refreshed_tx3.merge_parent_id is not None
+            assert table._merge_pending_tx_id is None
