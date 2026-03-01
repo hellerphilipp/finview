@@ -82,6 +82,23 @@ def _merge_parent_desc_subquery():
     )
 
 
+def _is_cross_account_merge_subquery():
+    """Scalar subquery that returns True when a merge group spans multiple accounts.
+
+    Counts distinct account_id values among all children sharing the same
+    merge_parent_id as the outer transaction. Returns > 1 when cross-account.
+    """
+    MergeSibling = Transaction.__table__.alias("merge_sibling_acc")
+    return (
+        select(
+            func.count(func.distinct(MergeSibling.c.account_id)) > 1
+        )
+        .where(MergeSibling.c.merge_parent_id == Transaction.merge_parent_id)
+        .correlate(Transaction.__table__)
+        .scalar_subquery()
+    )
+
+
 def load_transaction_page(
     session: Session,
     account_id: int | None = None,
@@ -96,7 +113,7 @@ def load_transaction_page(
     are excluded from normal rows but returned for all-accounts grouping.
 
     Rows are:
-    - Single account: list of tuples (Transaction, merge_net|None, merge_reviewed|None, merge_group_name|None)
+    - Single account: list of tuples (Transaction, merge_net|None, merge_reviewed|None, merge_group_name|None, is_cross_account_merge)
     - All accounts: list of tuples (Transaction, account_name, merge_net|None, merge_reviewed|None, merge_group_name|None)
     """
     no_split_parent = ~Transaction.id.in_(_parent_ids_subquery())
@@ -132,8 +149,9 @@ def load_transaction_page(
             .where(no_merge_parent)
         )
     else:
+        is_cross_account = _is_cross_account_merge_subquery().label("is_cross_account")
         stmt = (
-            select(Transaction, merge_net, merge_reviewed, merge_group_name)
+            select(Transaction, merge_net, merge_reviewed, merge_group_name, is_cross_account)
             .where(no_split_parent)
             .where(no_merge_parent)
         )

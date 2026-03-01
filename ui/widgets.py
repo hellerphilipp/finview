@@ -113,7 +113,7 @@ class TransactionTable(DataTable):
 
     def _row_cells(self, tx, row_num, account_name=None, merge_net=None,
                    merge_reviewed=None, merge_group_name=None,
-                   is_last_merge_child=False):
+                   is_last_merge_child=False, is_cross_account_merge=False):
         """Return plain cell values for a transaction."""
         cells = [
             str(row_num),
@@ -127,9 +127,13 @@ class TransactionTable(DataTable):
         if tx.parent_id is not None:
             desc = f"{desc} (split)"
         if tx.merge_parent_id is not None:
-            # Tree prefix for merge children
-            prefix = "  └─ " if is_last_merge_child else "  ├─ "
-            desc = f"{prefix}{desc}"
+            if is_cross_account_merge:
+                # Cross-account merge child in single-account view: show (m+) suffix
+                desc = f"{desc} [m+]"
+            else:
+                # Same-account merge child: tree prefix
+                prefix = "  └─ " if is_last_merge_child else "  ├─ "
+                desc = f"{prefix}{desc}"
 
         cells.extend([
             desc,
@@ -137,8 +141,9 @@ class TransactionTable(DataTable):
             tx.original_currency.value,
         ])
 
-        # Reviewed column: merge children inherit from parent
-        if tx.merge_parent_id is not None and merge_reviewed is not None:
+        # Reviewed column: cross-account merge children use their own status;
+        # same-account merge children inherit from parent
+        if tx.merge_parent_id is not None and merge_reviewed is not None and not is_cross_account_merge:
             cells.append("Yes" if merge_reviewed else "No")
         else:
             cells.append("Yes" if tx.reviewed_at else "No")
@@ -298,15 +303,17 @@ class TransactionTable(DataTable):
                 merge_net = row[1]
                 merge_reviewed = row[2]
                 merge_group_name = row[3]
+                is_cross_account = bool(row[4]) if row[4] else False
                 key = str(tx.id)
                 is_last = self._is_last_merge_child_single(rows, i - 1)
                 cells = self._row_cells(tx, i, merge_net=merge_net,
                                        merge_reviewed=merge_reviewed,
                                        merge_group_name=merge_group_name,
-                                       is_last_merge_child=is_last)
+                                       is_last_merge_child=is_last,
+                                       is_cross_account_merge=is_cross_account)
                 self.add_row(*cells, key=key)
-                if tx.merge_parent_id is not None:
-                    # Merge children: gray text, no background
+                if tx.merge_parent_id is not None and not is_cross_account:
+                    # Same-account merge children: gray text, no background
                     self._row_styles[key] = MERGE_CHILD_STYLE
                     self._merge_child_rows.add(key)
                     self._merge_child_to_parent[key] = tx.merge_parent_id

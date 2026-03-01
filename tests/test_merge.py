@@ -579,3 +579,112 @@ class TestMergeWidget:
             refreshed_tx3 = pilot.app.db.get(Transaction, tx3.id)
             assert refreshed_tx3.merge_parent_id is not None
             assert table._merge_pending_tx_id is None
+
+
+# ── Cross-Account Merge Display Tests ──
+
+
+class TestCrossAccountMergeQuery:
+    def test_cross_account_merge_children_marked(self, two_accounts, session):
+        """Cross-account merge children have is_cross_account_merge=True in single-account view."""
+        acc1, acc2, tx1, tx2 = two_accounts
+        queries.create_merge(session, [tx1.id, tx2.id], "Cross Merge")
+
+        _, _, rows = queries.load_transaction_page(session, account_id=acc1.id)
+        # tx1 should appear with is_cross_account = True
+        for row in rows:
+            tx = row[0]
+            is_cross = row[4]
+            if tx.id == tx1.id:
+                assert is_cross, "Cross-account merge child should be marked"
+                break
+        else:
+            pytest.fail("tx1 not found in rows for acc1")
+
+    def test_same_account_merge_not_cross_account(self, same_account_txs, session):
+        """Same-account merge children have is_cross_account_merge=False."""
+        acc, tx1, tx2, tx3 = same_account_txs
+        queries.create_merge(session, [tx1.id, tx2.id], "Same Merge")
+
+        _, _, rows = queries.load_transaction_page(session, account_id=acc.id)
+        for row in rows:
+            tx = row[0]
+            is_cross = row[4]
+            if tx.id == tx1.id:
+                assert not is_cross, "Same-account merge child should NOT be marked cross-account"
+                break
+        else:
+            pytest.fail("tx1 not found in rows")
+
+    def test_cross_account_merge_in_all_accounts(self, two_accounts, session):
+        """Cross-account merge still shows header + children in all-accounts view."""
+        acc1, acc2, tx1, tx2 = two_accounts
+        queries.create_merge(session, [tx1.id, tx2.id], "Cross Merge")
+
+        _, _, rows = queries.load_transaction_page(session, all_accounts=True)
+        header_rows = [r for r in rows if r[1] == "–"]
+        assert len(header_rows) == 1
+        assert header_rows[0][0].description == "Cross Merge"
+
+        # Both children should be present
+        child_ids = {r[0].id for r in rows if r[0].merge_parent_id is not None}
+        assert tx1.id in child_ids
+        assert tx2.id in child_ids
+
+
+class TestCrossAccountMergeWidget:
+    @pytest.fixture()
+    def merge_app(self, memory_db):
+        return FinViewApp()
+
+    async def test_cross_account_child_shows_m_plus(self, two_accounts, merge_app):
+        """Cross-account merge child shows [m+] suffix and is NOT in _merge_child_rows."""
+        async with merge_app.run_test() as pilot:
+            await pilot.pause()
+            acc1, acc2, tx1, tx2 = two_accounts
+
+            queries.create_merge(pilot.app.db, [tx1.id, tx2.id], "Cross Merge")
+
+            table = pilot.app.query_one(TransactionTable)
+            table.update_account(acc1, pilot.app.db)
+            await pilot.pause()
+
+            # Find tx1's row and check description
+            found = False
+            for row_idx in range(table.row_count):
+                row_key = table._row_locations.get_key(row_idx)
+                if row_key and row_key.value == str(tx1.id):
+                    desc_value = str(table.get_cell(row_key, "description"))
+                    assert "[m+]" in desc_value, f"Expected [m+] in '{desc_value}'"
+                    assert "├─" not in desc_value, "Should not have tree prefix"
+                    assert "└─" not in desc_value, "Should not have tree prefix"
+                    assert row_key.value not in table._merge_child_rows
+                    found = True
+                    break
+            assert found, "tx1 row not found in table"
+
+    async def test_same_account_merge_shows_tree_prefix(self, same_account_txs, merge_app):
+        """Same-account merge child shows tree prefix and IS in _merge_child_rows."""
+        async with merge_app.run_test() as pilot:
+            await pilot.pause()
+            acc, tx1, tx2, tx3 = same_account_txs
+
+            queries.create_merge(pilot.app.db, [tx1.id, tx2.id], "Same Merge")
+
+            table = pilot.app.query_one(TransactionTable)
+            table.update_account(acc, pilot.app.db)
+            await pilot.pause()
+
+            # Find merge children and check for tree prefix
+            found_child = False
+            for row_idx in range(table.row_count):
+                row_key = table._row_locations.get_key(row_idx)
+                if row_key and row_key.value in (str(tx1.id), str(tx2.id)):
+                    desc_value = str(table.get_cell(row_key, "description"))
+                    assert "├─" in desc_value or "└─" in desc_value, (
+                        f"Expected tree prefix in '{desc_value}'"
+                    )
+                    assert "[m+]" not in desc_value
+                    assert row_key.value in table._merge_child_rows
+                    found_child = True
+            assert found_child, "No merge child rows found"
