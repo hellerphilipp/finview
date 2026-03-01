@@ -7,7 +7,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Label, Input, Button, Select, Static
 from textual.containers import Vertical, Horizontal, VerticalScroll
 from datetime import datetime
-from models.finance import Currency, Transaction
+from models.finance import Account, Currency, Transaction
 from importers.schema import ImporterMapping
 
 class CreateAccountScreen(ModalScreen[dict]):
@@ -334,3 +334,181 @@ class SplitTransactionScreen(ModalScreen[list | None]):
                 "amount": amount,
             })
         return result
+
+
+class MergeTransactionScreen(ModalScreen[str | None]):
+    """Modal for creating a new merge group from two transactions.
+
+    Shows both transactions' summaries and an input for the group name.
+    Returns the group name string or None on cancel.
+    """
+
+    CSS = """
+    MergeTransactionScreen {
+        align: center middle;
+    }
+
+    #merge-dialog {
+        padding: 1 2;
+        width: 75;
+        height: auto;
+        border: thick $background 80%;
+        background: $surface;
+    }
+
+    #merge-dialog Label {
+        margin-bottom: 1;
+    }
+
+    .merge-tx-summary {
+        margin-bottom: 1;
+        padding: 0 1;
+    }
+
+    #merge-buttons {
+        width: 100%;
+        padding-top: 1;
+        align: center middle;
+    }
+
+    #merge-buttons Button {
+        margin: 0 2;
+    }
+    """
+
+    def __init__(
+        self,
+        tx1: Transaction,
+        tx2: Transaction,
+        acc1: Account | None = None,
+        acc2: Account | None = None,
+    ):
+        super().__init__()
+        self._tx1 = tx1
+        self._tx2 = tx2
+        self._acc1 = acc1
+        self._acc2 = acc2
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="merge-dialog"):
+            yield Label("Merge Transactions")
+
+            yield Label(self._tx_summary(self._tx1, self._acc1), classes="merge-tx-summary")
+            yield Label(self._tx_summary(self._tx2, self._acc2), classes="merge-tx-summary")
+
+            yield Label("Group name:")
+            default_name = f"{self._tx1.description} + {self._tx2.description}"
+            yield Input(value=default_name, id="merge-name")
+
+            with Horizontal(id="merge-buttons"):
+                yield Button("Cancel", id="cancel")
+                yield Button("Merge", variant="primary", id="merge")
+
+    def _tx_summary(self, tx: Transaction, acc: Account | None) -> str:
+        acc_name = acc.name if acc else "?"
+        return (
+            f"{tx.date.strftime('%Y-%m-%d %H:%M')}  |  "
+            f"{acc_name}  |  "
+            f"{tx.description}  |  "
+            f"{tx.original_value:.2f} {tx.original_currency.value}"
+        )
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "cancel":
+            self.dismiss(None)
+        elif event.button.id == "merge":
+            name = self.query_one("#merge-name", Input).value.strip()
+            if not name:
+                self.notify("Group name is required", severity="error")
+                return
+            self.dismiss(name)
+
+
+class MergeActionScreen(ModalScreen[str | None]):
+    """Mini-modal for managing an existing merge group.
+
+    Shows three options: Add to group, Remove from group, Rename.
+    Returns "add", "remove", "rename:<new_name>", or None on cancel.
+    """
+
+    CSS = """
+    MergeActionScreen {
+        align: center middle;
+    }
+
+    #merge-action-dialog {
+        padding: 1 2;
+        width: 50;
+        height: auto;
+        border: thick $background 80%;
+        background: $surface;
+    }
+
+    #merge-action-dialog Label {
+        margin-bottom: 1;
+    }
+
+    #merge-action-buttons {
+        width: 100%;
+        padding-top: 1;
+        align: center middle;
+    }
+
+    #merge-action-buttons Button {
+        margin: 0 1;
+    }
+
+    #rename-row {
+        display: none;
+        height: 3;
+        margin-top: 1;
+    }
+
+    #rename-row.visible {
+        display: block;
+    }
+    """
+
+    def __init__(self, merge_parent: Transaction, show_remove: bool = True):
+        super().__init__()
+        self._merge_parent = merge_parent
+        self._show_remove = show_remove
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="merge-action-dialog"):
+            yield Label(f"Merge Group: {self._merge_parent.description}")
+
+            with Horizontal(id="merge-action-buttons"):
+                yield Button("Add to group", id="add", variant="primary")
+                if self._show_remove:
+                    yield Button("Remove from group", id="remove", variant="error")
+                yield Button("Rename", id="rename-btn", variant="default")
+                yield Button("Cancel", id="cancel")
+
+            with Horizontal(id="rename-row"):
+                yield Input(
+                    value=self._merge_parent.description,
+                    id="rename-input",
+                    placeholder="New group name",
+                )
+                yield Button("Save", id="rename-save", variant="primary")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        btn_id = event.button.id or ""
+
+        if btn_id == "cancel":
+            self.dismiss(None)
+        elif btn_id == "add":
+            self.dismiss("add")
+        elif btn_id == "remove":
+            self.dismiss("remove")
+        elif btn_id == "rename-btn":
+            rename_row = self.query_one("#rename-row", Horizontal)
+            rename_row.add_class("visible")
+            self.query_one("#rename-input", Input).focus()
+        elif btn_id == "rename-save":
+            new_name = self.query_one("#rename-input", Input).value.strip()
+            if not new_name:
+                self.notify("Name cannot be empty", severity="error")
+                return
+            self.dismiss(f"rename:{new_name}")

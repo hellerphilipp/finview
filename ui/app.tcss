@@ -85,7 +85,9 @@ AccountItem > Horizontal {
 /* Shared modal styles */
 CreateAccountScreen,
 MigrationPromptScreen,
-ImportFileDialog {
+ImportFileDialog,
+MergeTransactionScreen,
+MergeActionScreen {
     align: center middle;
 }
 

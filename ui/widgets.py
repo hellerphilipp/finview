@@ -9,13 +9,14 @@ from textual.binding import Binding
 
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
-from models.finance import Transaction
-from .screens import ImportFileDialog, SplitTransactionScreen
+from models.finance import Account, Transaction
+from .screens import ImportFileDialog, SplitTransactionScreen, MergeTransactionScreen, MergeActionScreen
 import db
 import queries
 
 REVIEWED_BG = Style(bgcolor="dark_green")
 UNREVIEWED_BG = Style(bgcolor="dark_red")
+MERGE_CHILD_STYLE = Style(color="grey50")
 
 BASE_COLUMNS = [
     ("#", "row_num"),
@@ -27,6 +28,9 @@ BASE_COLUMNS = [
 ]
 
 ACCOUNT_COLUMN = ("Account", "account")
+
+# Prefix for merge header row keys in the DataTable
+MERGE_HEADER_KEY_PREFIX = "merge_header_"
 
 
 class AccountSidebar(ListView):
@@ -61,6 +65,7 @@ class TransactionTable(DataTable):
         Binding("i", "import_csv", "Import CSV", show=True),
         Binding("enter", "toggle_reviewed", "Reviewed", show=True),
         Binding("s", "split_transaction", "Split", show=True),
+        Binding("m", "merge_transaction", "Merge", show=True),
     ]
 
     def on_mount(self):
@@ -76,6 +81,14 @@ class TransactionTable(DataTable):
         self._search_term: str = ""
         self._search_matches: list[int] = []
         self._search_index: int = -1
+        # Merge pending state
+        self._merge_pending_tx_id: int | None = None  # for new merges
+        self._merge_pending_parent_id: int | None = None  # for add-to-group
+        self._merge_pending_desc: str = ""  # description for page-info
+        # Track which rows are merge children or headers
+        self._merge_child_rows: set[str] = set()  # row keys that are merge children
+        self._merge_header_rows: set[str] = set()  # row keys that are merge headers
+        self._merge_child_to_parent: dict[str, int] = {}  # child row key → merge parent id
         for label, key in BASE_COLUMNS:
             self.add_column(label, key=key)
 
@@ -98,7 +111,9 @@ class TransactionTable(DataTable):
         for label, key in cols:
             self.add_column(label, key=key)
 
-    def _row_cells(self, tx, row_num, account_name=None):
+    def _row_cells(self, tx, row_num, account_name=None, merge_net=None,
+                   merge_reviewed=None, merge_group_name=None,
+                   is_last_merge_child=False):
         """Return plain cell values for a transaction."""
         cells = [
             str(row_num),
@@ -106,12 +121,43 @@ class TransactionTable(DataTable):
         ]
         if account_name is not None:
             cells.append(account_name)
-        desc = f"{tx.description} (split)" if tx.parent_id is not None else tx.description
+
+        # Build description with merge/split prefixes
+        desc = tx.description
+        if tx.parent_id is not None:
+            desc = f"{desc} (split)"
+        if tx.merge_parent_id is not None:
+            # Tree prefix for merge children
+            prefix = "  └─ " if is_last_merge_child else "  ├─ "
+            desc = f"{prefix}{desc}"
+
         cells.extend([
             desc,
             f"{tx.original_value:>10.2f}",
             tx.original_currency.value,
-            "Yes" if tx.reviewed_at else "No",
+        ])
+
+        # Reviewed column: merge children inherit from parent
+        if tx.merge_parent_id is not None and merge_reviewed is not None:
+            cells.append("Yes" if merge_reviewed else "No")
+        else:
+            cells.append("Yes" if tx.reviewed_at else "No")
+
+        return tuple(cells)
+
+    def _merge_header_cells(self, parent_tx, row_num, net, currency, account_name=None):
+        """Return cell values for a merge group header row."""
+        cells = [
+            str(row_num),
+            parent_tx.date.strftime("%Y-%m-%d %H:%M"),
+        ]
+        if account_name is not None:
+            cells.append(account_name)
+        cells.extend([
+            parent_tx.description,
+            f"{net:>10.2f}",
+            currency,
+            "Yes" if parent_tx.reviewed_at else "No",
         ])
         return tuple(cells)
 
@@ -159,7 +205,37 @@ class TransactionTable(DataTable):
                 )
             else:
                 parts.append(f"/{self._search_term} [0/0]")
+        # Merge pending indicator (escape brackets to avoid Rich markup interpretation)
+        if self._merge_pending_parent_id is not None:
+            parts.append(f"\\[merge+: {self._merge_pending_desc[:20]}]")
+        elif self._merge_pending_tx_id is not None:
+            parts.append(f"\\[merge: {self._merge_pending_desc[:20]}]")
         info.update(" | ".join(parts))
+
+    def _is_last_merge_child(self, rows, idx):
+        """Check if the row at idx is the last merge child before a non-child row (all-accounts mode)."""
+        tx = rows[idx][0]
+        if tx.merge_parent_id is None:
+            return False
+        # Look at the next row
+        if idx + 1 >= len(rows):
+            return True
+        next_tx = rows[idx + 1][0]
+        # Last child if next row is not a merge child of the same parent
+        return next_tx.merge_parent_id != tx.merge_parent_id
+
+    def _is_last_merge_child_single(self, rows, idx):
+        """Check if the row at idx is the last merge child (single-account mode)."""
+        tx = rows[idx][0]
+        if tx.merge_parent_id is None:
+            return False
+        # In single-account mode, merge children may not be grouped contiguously.
+        # Check if there's another child with the same parent after this one.
+        parent_id = tx.merge_parent_id
+        for j in range(idx + 1, len(rows)):
+            if rows[j][0].merge_parent_id == parent_id:
+                return False
+        return True
 
     def _load_transactions(self):
         """Load all transactions and update counts from DB."""
@@ -175,17 +251,67 @@ class TransactionTable(DataTable):
         self.clear()
         self._row_styles = {}
         self._clear_search()
+        self._merge_child_rows = set()
+        self._merge_header_rows = set()
+        self._merge_child_to_parent = {}
 
         if self._all_accounts_mode:
-            for i, (tx, account_name) in enumerate(rows, start=1):
-                key = str(tx.id)
-                self.add_row(*self._row_cells(tx, i, account_name=account_name), key=key)
-                self._row_styles[key] = REVIEWED_BG if tx.reviewed_at else UNREVIEWED_BG
+            for i, row in enumerate(rows, start=1):
+                tx = row[0]
+                account_name = row[1]
+                merge_net = row[2]
+                merge_reviewed = row[3]
+                merge_group_name = row[4]
+
+                # Check if this is a merge header row
+                is_header = (account_name == "–")
+
+                if is_header:
+                    key = f"{MERGE_HEADER_KEY_PREFIX}{tx.id}"
+                    net = merge_net if merge_net is not None else 0
+                    currency = tx.original_currency.value
+                    cells = self._merge_header_cells(tx, i, net, currency, account_name="–")
+                    self.add_row(*cells, key=key)
+                    # Merge parent gets normal reviewed/unreviewed background
+                    self._row_styles[key] = REVIEWED_BG if tx.reviewed_at else UNREVIEWED_BG
+                    self._merge_header_rows.add(key)
+                else:
+                    key = str(tx.id)
+                    # Determine if this is the last child in its merge group
+                    is_last = self._is_last_merge_child(rows, i - 1)
+                    cells = self._row_cells(tx, i, account_name=account_name,
+                                           merge_net=merge_net,
+                                           merge_reviewed=merge_reviewed,
+                                           merge_group_name=merge_group_name,
+                                           is_last_merge_child=is_last)
+                    self.add_row(*cells, key=key)
+                    if tx.merge_parent_id is not None:
+                        # Merge children: gray text, no background
+                        self._row_styles[key] = MERGE_CHILD_STYLE
+                        self._merge_child_rows.add(key)
+                        self._merge_child_to_parent[key] = tx.merge_parent_id
+                    else:
+                        self._row_styles[key] = REVIEWED_BG if tx.reviewed_at else UNREVIEWED_BG
         else:
-            for i, tx in enumerate(rows, start=1):
+            for i, row in enumerate(rows, start=1):
+                tx = row[0]
+                merge_net = row[1]
+                merge_reviewed = row[2]
+                merge_group_name = row[3]
                 key = str(tx.id)
-                self.add_row(*self._row_cells(tx, i), key=key)
-                self._row_styles[key] = REVIEWED_BG if tx.reviewed_at else UNREVIEWED_BG
+                is_last = self._is_last_merge_child_single(rows, i - 1)
+                cells = self._row_cells(tx, i, merge_net=merge_net,
+                                       merge_reviewed=merge_reviewed,
+                                       merge_group_name=merge_group_name,
+                                       is_last_merge_child=is_last)
+                self.add_row(*cells, key=key)
+                if tx.merge_parent_id is not None:
+                    # Merge children: gray text, no background
+                    self._row_styles[key] = MERGE_CHILD_STYLE
+                    self._merge_child_rows.add(key)
+                    self._merge_child_to_parent[key] = tx.merge_parent_id
+                else:
+                    self._row_styles[key] = REVIEWED_BG if tx.reviewed_at else UNREVIEWED_BG
 
         self._update_banner()
 
@@ -331,12 +457,48 @@ class TransactionTable(DataTable):
         row_key = self._row_locations.get_key(row_index)
         if row_key is None:
             return False
+
+        key_value = row_key.value
+
+        # Merge children are not independently reviewable
+        if key_value in self._merge_child_rows:
+            self.app.notify(
+                "This transaction is part of a merge group — review the group instead",
+                severity="warning",
+            )
+            return False
+
+        # Merge header: toggle the parent and update its children visually
+        if key_value in self._merge_header_rows:
+            parent_id = int(key_value.replace(MERGE_HEADER_KEY_PREFIX, ""))
+            session = self._session or self.app.db
+            tx = queries.toggle_reviewed(session, parent_id)
+            if tx is None:
+                return False
+            db.mark_dirty()
+            reviewed = tx.reviewed_at is not None
+            self._row_styles[key_value] = REVIEWED_BG if reviewed else UNREVIEWED_BG
+            self.update_cell(row_key, "reviewed", "Yes" if reviewed else "No")
+            # Update only this parent's child rows' reviewed text (keep gray style)
+            from textual.widgets._data_table import RowKey
+            for child_key_value, child_parent_id in self._merge_child_to_parent.items():
+                if child_parent_id != parent_id:
+                    continue
+                try:
+                    child_row_key = RowKey(child_key_value)
+                    self.update_cell(child_row_key, "reviewed", "Yes" if reviewed else "No")
+                except Exception:
+                    pass
+            self._clear_caches()
+            self._total_unreviewed += -1 if reviewed else 1
+            return True
+
         session = self._session or self.app.db
-        tx = queries.toggle_reviewed(session, int(row_key.value))
+        tx = queries.toggle_reviewed(session, int(key_value))
         if tx is None:
             return False
         db.mark_dirty()
-        self._row_styles[row_key.value] = REVIEWED_BG if tx.reviewed_at else UNREVIEWED_BG
+        self._row_styles[key_value] = REVIEWED_BG if tx.reviewed_at else UNREVIEWED_BG
         self.update_cell(row_key, "reviewed", "Yes" if tx.reviewed_at else "No")
         self._clear_caches()
         self._total_unreviewed += -1 if tx.reviewed_at else 1
@@ -360,7 +522,168 @@ class TransactionTable(DataTable):
                 self.move_cursor(row=row + 1)
 
     def action_focus_sidebar(self):
+        # Layered escape: clear merge pending first
+        if self._merge_pending_tx_id is not None or self._merge_pending_parent_id is not None:
+            self._clear_merge_pending()
+            self._update_page_info()
+            return
         self.app.action_focus_sidebar()
+
+    # --- Merge ---
+
+    def _clear_merge_pending(self):
+        self._merge_pending_tx_id = None
+        self._merge_pending_parent_id = None
+        self._merge_pending_desc = ""
+
+    def action_merge_transaction(self):
+        if self.row_count == 0:
+            return
+
+        row_key, _ = self.coordinate_to_cell_key(self.cursor_coordinate)
+        key_value = row_key.value
+        session = self._session or self.app.db
+
+        # Case 1: cursor is on a merge header row
+        if key_value in self._merge_header_rows:
+            parent_id = int(key_value.replace(MERGE_HEADER_KEY_PREFIX, ""))
+            parent = session.get(Transaction, parent_id)
+            if parent is None:
+                return
+            # If there's a pending ungrouped tx, add it to this group
+            if self._merge_pending_tx_id is not None:
+                try:
+                    queries.add_to_merge(session, parent_id, self._merge_pending_tx_id)
+                    db.mark_dirty()
+                    self.app.notify("Transaction added to merge group")
+                except ValueError as e:
+                    self.app.notify(str(e), severity="error")
+                self._clear_merge_pending()
+                self._load_transactions()
+                return
+            self._show_merge_action_screen(parent)
+            return
+
+        tx_id = int(key_value)
+        tx = session.get(Transaction, tx_id)
+        if tx is None:
+            return
+
+        # Case 2: transaction is already in a merge group
+        if tx.merge_parent_id is not None:
+            parent = session.get(Transaction, tx.merge_parent_id)
+            if parent is None:
+                return
+            # If there's a pending ungrouped tx, add it to this group
+            if self._merge_pending_tx_id is not None:
+                try:
+                    queries.add_to_merge(session, parent.id, self._merge_pending_tx_id)
+                    db.mark_dirty()
+                    self.app.notify("Transaction added to merge group")
+                except ValueError as e:
+                    self.app.notify(str(e), severity="error")
+                self._clear_merge_pending()
+                self._load_transactions()
+                return
+            self._show_merge_action_screen(parent, tx)
+            return
+
+        # Case 3: pending merge, same transaction → cancel
+        if self._merge_pending_tx_id == tx_id:
+            self._clear_merge_pending()
+            self._update_page_info()
+            return
+
+        # Case 4: pending merge (add-to-group), different ungrouped tx
+        if self._merge_pending_parent_id is not None:
+            try:
+                queries.add_to_merge(session, self._merge_pending_parent_id, tx_id)
+                db.mark_dirty()
+                self.app.notify("Transaction added to merge group")
+            except ValueError as e:
+                self.app.notify(str(e), severity="error")
+            self._clear_merge_pending()
+            self._load_transactions()
+            return
+
+        # Case 5: pending merge (new merge), different tx
+        if self._merge_pending_tx_id is not None:
+            pending_tx = session.get(Transaction, self._merge_pending_tx_id)
+            if pending_tx is None:
+                self._clear_merge_pending()
+                return
+            self._show_create_merge_screen(pending_tx, tx)
+            return
+
+        # Case 6: no pending → start pending
+        self._merge_pending_tx_id = tx_id
+        self._merge_pending_desc = tx.description
+        self._update_page_info()
+
+    def _show_create_merge_screen(self, tx1, tx2):
+        session = self._session or self.app.db
+
+        # Eager-load accounts
+        from models.finance import Account
+        acc1 = session.get(Account, tx1.account_id)
+        acc2 = session.get(Account, tx2.account_id)
+
+        def handle_merge(name: str | None):
+            if name is None:
+                self._clear_merge_pending()
+                self._update_page_info()
+                return
+            try:
+                queries.create_merge(session, [tx1.id, tx2.id], name)
+                db.mark_dirty()
+                self.app.notify(f"Created merge group: {name}")
+            except ValueError as e:
+                self.app.notify(str(e), severity="error")
+            self._clear_merge_pending()
+            self._load_transactions()
+
+        self.app.push_screen(
+            MergeTransactionScreen(tx1, tx2, acc1, acc2), handle_merge
+        )
+
+    def _show_merge_action_screen(self, parent, child_tx=None):
+        def handle_action(result: str | None):
+            if result is None:
+                return
+            session = self._session or self.app.db
+
+            if result == "add":
+                self._merge_pending_parent_id = parent.id
+                self._merge_pending_desc = parent.description
+                self._update_page_info()
+                return
+
+            if result == "remove" and child_tx is not None:
+                dissolved_name = queries.remove_from_merge(session, child_tx.id)
+                db.mark_dirty()
+                if dissolved_name:
+                    self.app.notify(
+                        f"Group '{dissolved_name}' dissolved — only one transaction remained"
+                    )
+                else:
+                    self.app.notify("Transaction removed from merge group")
+                self._load_transactions()
+                return
+
+            if result.startswith("rename:"):
+                new_name = result[7:]
+                try:
+                    queries.rename_merge(session, parent.id, new_name)
+                    db.mark_dirty()
+                    self.app.notify(f"Group renamed to: {new_name}")
+                except ValueError as e:
+                    self.app.notify(str(e), severity="error")
+                self._load_transactions()
+                return
+
+        self.app.push_screen(
+            MergeActionScreen(parent, show_remove=(child_tx is not None)), handle_action
+        )
 
     def action_import_csv(self):
         if not self.current_account:
@@ -374,7 +697,7 @@ class TransactionTable(DataTable):
         def handle_import(csv_path: str | None):
             if not csv_path:
                 return
-            
+
             # Call a processing method on the app or handle it here
             # Since we need the DB session, let's trigger an app method
             self.app.process_csv_import(csv_path, self.current_account)
@@ -386,6 +709,11 @@ class TransactionTable(DataTable):
             return
 
         row_key, _ = self.coordinate_to_cell_key(self.cursor_coordinate)
+
+        # Can't split merge headers
+        if row_key.value in self._merge_header_rows:
+            return
+
         session = self._session or self.app.db
         tx = session.get(Transaction, int(row_key.value))
         if tx is None:
