@@ -327,7 +327,7 @@ class TestSplitChildMerge:
             original_currency=Currency.CHF,
             value_in_account_currency=Decimal("50.00"),
             date=datetime(2025, 3, 1),
-            parent_id=parent.id,
+            split_parent_id=parent.id,
         )
         reimbursement = Transaction(
             account_id=acc.id,
@@ -345,7 +345,7 @@ class TestSplitChildMerge:
             session, [child.id, reimbursement.id], "Split+Merge"
         )
         session.refresh(child)
-        assert child.parent_id == parent.id  # split relationship preserved
+        assert child.split_parent_id == parent.id  # split relationship preserved
         assert child.merge_parent_id == merge_parent.id  # merge relationship added
 
 

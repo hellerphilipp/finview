@@ -42,7 +42,7 @@ class TestTransactionSplitting:
             original_currency=Currency.CHF,
             value_in_account_currency=600.00,
             date=parent.date,
-            parent_id=parent.id,
+            split_parent_id=parent.id,
         )
         child2 = Transaction(
             account_id=sample_account.id,
@@ -51,14 +51,14 @@ class TestTransactionSplitting:
             original_currency=Currency.CHF,
             value_in_account_currency=400.00,
             date=parent.date,
-            parent_id=parent.id,
+            split_parent_id=parent.id,
         )
         session.add_all([child1, child2])
         session.commit()
 
         session.refresh(parent)
-        assert len(parent.children) == 2
-        assert {c.description for c in parent.children} == {"Split A", "Split B"}
+        assert len(parent.split_children) == 2
+        assert {c.description for c in parent.split_children} == {"Split A", "Split B"}
 
     def test_cascade_delete(self, sample_account, session):
         parent = sample_account.transactions[0]
@@ -69,7 +69,7 @@ class TestTransactionSplitting:
             original_currency=Currency.CHF,
             value_in_account_currency=500.00,
             date=parent.date,
-            parent_id=parent.id,
+            split_parent_id=parent.id,
         )
         session.add(child)
         session.commit()

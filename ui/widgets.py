@@ -124,7 +124,7 @@ class TransactionTable(DataTable):
 
         # Build description with merge/split prefixes
         desc = tx.description
-        if tx.parent_id is not None:
+        if tx.split_parent_id is not None:
             desc = f"{desc} [s]"
         if tx.merge_parent_id is not None:
             if is_cross_account_merge:
@@ -749,8 +749,8 @@ class TransactionTable(DataTable):
 
         # Navigate to root parent if this is a child
         root = tx
-        while root.parent_id is not None:
-            root = session.get(Transaction, root.parent_id)
+        while root.split_parent_id is not None:
+            root = session.get(Transaction, root.split_parent_id)
             if root is None:
                 return
 
@@ -758,10 +758,10 @@ class TransactionTable(DataTable):
         root = session.execute(
             select(Transaction)
             .where(Transaction.id == root.id)
-            .options(selectinload(Transaction.children))
+            .options(selectinload(Transaction.split_children))
         ).scalar_one()
 
-        existing = list(root.children) if root.children else None
+        existing = list(root.split_children) if root.split_children else None
 
         def handle_split(splits: list[dict] | None):
             if splits is None:
@@ -771,7 +771,7 @@ class TransactionTable(DataTable):
             returned_ids = {s["id"] for s in splits if s["id"] is not None}
 
             # Delete removed children
-            for child in list(root.children):
+            for child in list(root.split_children):
                 if child.id not in returned_ids:
                     session.delete(child)
 
@@ -804,7 +804,7 @@ class TransactionTable(DataTable):
                         original_currency=root.original_currency,
                         value_in_account_currency=acc_amount,
                         date=root.date,
-                        parent_id=root.id,
+                        split_parent_id=root.id,
                     )
                     session.add(child)
 

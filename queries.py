@@ -25,11 +25,11 @@ def get_all_accounts_with_balances(session: Session) -> list[tuple[Account, Deci
     return [(acc, Decimal(str(bal))) for acc, bal in session.execute(stmt).all()]
 
 
-def _parent_ids_subquery():
+def _split_parent_ids_subquery():
     """Subquery returning transaction ids that have children (are split parents)."""
     return (
-        select(Transaction.parent_id)
-        .where(Transaction.parent_id.is_not(None))
+        select(Transaction.split_parent_id)
+        .where(Transaction.split_parent_id.is_not(None))
         .distinct()
         .scalar_subquery()
     )
@@ -116,7 +116,7 @@ def load_transaction_page(
     - Single account: list of tuples (Transaction, merge_net|None, merge_reviewed|None, merge_group_name|None, is_cross_account_merge)
     - All accounts: list of tuples (Transaction, account_name, merge_net|None, merge_reviewed|None, merge_group_name|None)
     """
-    no_split_parent = ~Transaction.id.in_(_parent_ids_subquery())
+    no_split_parent = ~Transaction.id.in_(_split_parent_ids_subquery())
     no_merge_parent = ~Transaction.id.in_(_merge_parent_ids_subquery())
     is_not_merge_child = Transaction.merge_parent_id.is_(None)
 
