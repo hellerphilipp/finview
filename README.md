@@ -17,16 +17,24 @@ pip install -r requirements.txt
 
 2. **Run the application**:
 ```bash
-python main.py
-
+python main.py [database]
 ```
+If a database path is provided, FinView opens (or creates) that file. Without one, it starts with a pure in-memory database. Use `--version` or `--license` for version/license info.
 
 
 3. **Basic Controls**:
 * `c`: Create a new account
 * `i`: Import a CSV file (when an account with a mapping spec is selected)
 * `r`: Refresh data
-* `q`: Quit
+* `Enter`: Toggle reviewed status on selected transaction
+* `s`: Split a transaction
+* `m`: Merge transactions
+* `j` / `k`: Move cursor down / up
+* `g` / `G`: Jump to first / last row
+* `/`: Search transactions
+* `n` / `N`: Next / previous search match
+* `Escape`: Return focus to sidebar
+* `:q`: Quit (`:wq` to save and quit, `:q!` to discard changes)
 
 ---
 

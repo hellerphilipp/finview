@@ -79,6 +79,7 @@ alembic upgrade head
 * **Dynamic Widget Mounting**: When building composite widgets dynamically (after initial compose), pass children to the constructor (e.g. `Horizontal(child1, child2)`) instead of using `compose_add_child()`, which only works during the compose phase. When querying children of a dynamically mounted widget, guard with try/except since children may not be in the DOM yet.
 * **App-Level Event Handlers + Modals**: `on_key` and other app-level handlers fire even when a modal screen is active, but `query_one()` for main-screen widgets will raise `NoMatches` because modals have their own DOM. Always guard such queries with `try/except`.
 * **Dock Layering**: A `dock: left` sidebar spans the full height and covers `dock: bottom` widgets. For full-width elements (like a command input) between main content and Footer, use normal flow positioning instead of `dock: bottom`.
+* **GPL v3 License Headers**: All `.py` source files (except `__init__.py`, `tests/`, and `alembic/versions/`) must include the standard short-form GPL v3 copyright header at the top. New source files must include it too.
 
 ## Testing
 
