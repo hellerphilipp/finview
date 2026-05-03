@@ -429,7 +429,7 @@ class TestMergeWidget:
 
             from textual.widgets import Static
             info = pilot.app.query_one("#page-info", Static)
-            assert "[merge:" in info.renderable
+            assert "[merge:" in str(info.content)
 
     async def test_m_on_second_tx_opens_merge_screen(self, same_account_txs, merge_app):
         async with merge_app.run_test() as pilot:

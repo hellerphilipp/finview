@@ -28,7 +28,7 @@ class TestAccountCreation:
             await pilot.pause()
             from ui.screens import CreateAccountScreen
 
-            screens = pilot.app.query(CreateAccountScreen)
+            screens = pilot.app.screen.query(CreateAccountScreen)
             assert len(screens) > 0 or len(pilot.app.screen_stack) > 1
 
 
@@ -244,7 +244,7 @@ class TestVimNavigation:
             await pilot.pause()
             from textual.widgets import Static
             info = pilot.app.query_one("#page-info", Static)
-            assert "g>" in info.renderable
+            assert "g>" in str(info.content)
 
     async def test_count_shown_in_page_info(self, account_with_10_txs, finview_app):
         async with finview_app.run_test() as pilot:
@@ -253,7 +253,7 @@ class TestVimNavigation:
             await pilot.pause()
             from textual.widgets import Static
             info = pilot.app.query_one("#page-info", Static)
-            assert "5>" in info.renderable
+            assert "5>" in str(info.content)
 
     async def test_batch_toggle(self, account_with_10_txs, finview_app):
         async with finview_app.run_test() as pilot:
