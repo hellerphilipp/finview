@@ -83,7 +83,10 @@ def main():
     if args.database:
         cmd.append(os.path.abspath(os.path.expanduser(args.database)))
 
-    subprocess.run(cmd)
+    try:
+        subprocess.run(cmd)
+    except KeyboardInterrupt:
+        pass
 
 
 if __name__ == "__main__":

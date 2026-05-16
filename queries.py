@@ -656,6 +656,16 @@ def toggle_reviewed(session: Session, tx_id: int) -> Transaction | None:
     return tx
 
 
+def set_reviewed(session: Session, tx_id: int, reviewed: bool) -> Transaction | None:
+    """Set reviewed_at on a transaction to a specific state and commit."""
+    tx = session.get(Transaction, tx_id)
+    if tx is None:
+        return None
+    tx.reviewed_at = datetime.datetime.now() if reviewed else None
+    session.commit()
+    return tx
+
+
 def import_csv_transactions(session: Session, csv_path: str, account: Account) -> int:
     """Parse a CSV file using the account's mapping spec, insert transactions, and commit.
 

@@ -42,6 +42,7 @@ def init_db():
         db.load_db_from_file(db_path)
         if db.has_pending_migrations():
             db.run_migrations()
+            st.session_state["migrated"] = True
     elif db_path:
         db.init_new_db(db_path)
     else:
@@ -49,6 +50,9 @@ def init_db():
 
     st.session_state["db_initialized"] = True
     st.session_state["session"] = db.SessionLocal()
+    # Clear dirty flag unless migrations ran (those need saving)
+    if not st.session_state.get("migrated"):
+        db.clear_dirty()
 
 
 def get_session():
@@ -281,13 +285,9 @@ def render_transactions():
         f"{acc.name} ({acc.currency.value})": acc for acc, _ in accounts
     }
 
-    filter_col1, filter_col2 = st.columns([2, 2])
-    with filter_col1:
-        selected_account_label = st.selectbox(
-            "Account", account_labels, key="tx_account"
-        )
-    with filter_col2:
-        search_term = st.text_input("Search", key="tx_search", placeholder="Filter by description...")
+    selected_account_label = st.selectbox(
+        "Account", account_labels, key="tx_account"
+    )
 
     all_accounts = selected_account_label == "All Accounts"
     account_id = (
@@ -343,16 +343,6 @@ def render_transactions():
 
         cat_path = category_paths.get(tx.category_id, "") if tx.category_id else ""
 
-        # Apply search filter
-        if search_term:
-            term = search_term.lower()
-            if (
-                term not in desc.lower()
-                and term not in cat_path.lower()
-                and term not in tx.date.strftime("%Y-%m-%d").lower()
-            ):
-                continue
-
         display_rows.append(
             {
                 "id": tx.id,
@@ -370,10 +360,10 @@ def render_transactions():
         )
 
     if not display_rows:
-        st.info("No transactions match the search.")
+        st.info("No transactions found.")
         return
 
-    # --- Display table ---
+    # --- Display table with row selection ---
     import pandas as pd
 
     cols = ["date", "description", "category", "amount", "currency", "reviewed"]
@@ -381,98 +371,111 @@ def render_transactions():
         cols.insert(1, "account")
 
     df = pd.DataFrame(display_rows)[cols]
-    st.dataframe(
+    event = st.dataframe(
         df,
         use_container_width=True,
         hide_index=True,
+        selection_mode="multi-row",
+        on_select="rerun",
         column_config={
             "amount": st.column_config.NumberColumn(format="%.2f"),
         },
     )
 
+    selected_indices = event.selection.rows
+    selected_rows = [display_rows[i] for i in selected_indices]
+    selected_txs = [r["_tx"] for r in selected_rows]
+    num_selected = len(selected_rows)
+
     # --- Actions ---
     st.divider()
-    st.markdown("**Actions**")
 
-    # Transaction selector
-    tx_options = {
-        f"#{r['id']} | {r['date']} | {r['description'][:50]}": r
-        for r in display_rows
-        if not r["_is_merge_header"]
-    }
+    if num_selected == 0:
+        st.caption("Select one or more rows above to perform actions.")
+    else:
+        st.markdown(f"**{num_selected} transaction(s) selected**")
 
-    if not tx_options:
-        return
+        action_cols = st.columns(4)
 
-    selected_tx_label = st.selectbox(
-        "Select transaction", list(tx_options.keys()), key="tx_select"
-    )
-    selected_row = tx_options[selected_tx_label]
-    selected_tx = selected_row["_tx"]
-
-    action_cols = st.columns(5)
-
-    # Toggle reviewed
-    with action_cols[0]:
-        review_label = "Unreview" if selected_tx.reviewed_at else "Review"
-        if st.button(review_label):
-            queries.toggle_reviewed(session, selected_tx.id)
-            db.mark_dirty()
-            st.rerun()
-
-    # Assign category
-    with action_cols[1]:
-        cat_paths = queries.get_all_category_paths(session)
-        if cat_paths:
-            cat_options = {"(none)": None} | {
-                path: cid for cid, path in cat_paths
-            }
-            current_cat = category_paths.get(selected_tx.category_id, "(none)")
-            current_idx = list(cat_options.keys()).index(current_cat) if current_cat in cat_options else 0
-            new_cat = st.selectbox(
-                "Category",
-                list(cat_options.keys()),
-                index=current_idx,
-                key="assign_cat",
-            )
-            if st.button("Assign"):
-                queries.assign_category(session, selected_tx.id, cat_options[new_cat])
+        # Bulk review/unreview
+        with action_cols[0]:
+            all_reviewed = all(tx.reviewed_at for tx in selected_txs)
+            if all_reviewed:
+                review_label = "Unreview All" if num_selected > 1 else "Unreview"
+            else:
+                review_label = "Review All" if num_selected > 1 else "Review"
+            if st.button(review_label):
+                target_state = not all_reviewed
+                for tx in selected_txs:
+                    queries.set_reviewed(session, tx.id, target_state)
                 db.mark_dirty()
                 st.rerun()
 
-    # Split
-    with action_cols[2]:
-        if st.button("Split"):
-            st.session_state["split_tx_id"] = selected_tx.id
+        # Bulk category assignment
+        with action_cols[1]:
+            cat_paths = queries.get_all_category_paths(session)
+            if cat_paths:
+                cat_options = {"(none)": None} | {
+                    path: cid for cid, path in cat_paths
+                }
+                new_cat = st.selectbox(
+                    "Category",
+                    list(cat_options.keys()),
+                    key="assign_cat",
+                )
+                if st.button("Assign Category"):
+                    for tx in selected_txs:
+                        queries.assign_category(session, tx.id, cat_options[new_cat])
+                    db.mark_dirty()
+                    st.rerun()
 
-    # Merge
-    with action_cols[3]:
-        if st.button("Merge"):
-            if "merge_pending_id" not in st.session_state:
-                st.session_state["merge_pending_id"] = selected_tx.id
-                st.info(f"Select another transaction and click Merge again.")
-            else:
-                pending_id = st.session_state.pop("merge_pending_id")
-                if pending_id == selected_tx.id:
-                    st.warning("Cancelled merge — same transaction selected.")
-                else:
-                    st.session_state["merge_ids"] = [pending_id, selected_tx.id]
+        # Single-row actions: Split + Edit Description
+        if num_selected == 1:
+            selected_tx = selected_txs[0]
+            selected_row = selected_rows[0]
 
-    # Edit description
-    with action_cols[4]:
-        new_desc = st.text_input("Description", value=selected_tx.description, key="edit_desc")
-        if st.button("Update"):
-            selected_tx.description = new_desc
-            session.commit()
-            db.mark_dirty()
-            st.rerun()
+            with action_cols[2]:
+                if st.button("Split"):
+                    st.session_state["split_tx_id"] = selected_tx.id
 
-    # --- Merge pending indicator ---
-    if "merge_pending_id" in st.session_state:
-        st.info(
-            f"Merge pending: transaction #{st.session_state['merge_pending_id']}. "
-            "Select another transaction and click Merge to complete, or click Merge on the same to cancel."
-        )
+            with action_cols[3]:
+                new_desc = st.text_input(
+                    "Description", value=selected_tx.description, key="edit_desc"
+                )
+                if st.button("Update Description"):
+                    selected_tx.description = new_desc
+                    session.commit()
+                    db.mark_dirty()
+                    st.rerun()
+
+        # Multi-row action: Merge
+        if num_selected >= 2:
+            with action_cols[2]:
+                if st.button("Merge Selected"):
+                    st.session_state["merge_ids"] = [tx.id for tx in selected_txs]
+
+        # Merge child actions (single selection of a merge child)
+        if num_selected == 1 and selected_rows[0]["_is_merge_child"]:
+            st.divider()
+            st.markdown("**Merge Group Actions**")
+            mg_col1, mg_col2 = st.columns(2)
+            with mg_col1:
+                if st.button("Remove from Merge"):
+                    dissolved = queries.remove_from_merge(session, selected_txs[0].id)
+                    db.mark_dirty()
+                    if dissolved:
+                        st.info(f"Merge group '{dissolved}' dissolved.")
+                    st.rerun()
+            with mg_col2:
+                parent = session.get(Transaction, selected_txs[0].merge_parent_id)
+                if parent:
+                    new_merge_name = st.text_input(
+                        "Rename group", value=parent.description, key="rename_merge"
+                    )
+                    if st.button("Rename Merge"):
+                        queries.rename_merge(session, parent.id, new_merge_name)
+                        db.mark_dirty()
+                        st.rerun()
 
     # --- Merge dialog ---
     if "merge_ids" in st.session_state:
@@ -582,29 +585,6 @@ def render_transactions():
                         del st.session_state["split_rows"]
                     st.rerun()
 
-    # --- Merge group management for merge children ---
-    if selected_row["_is_merge_child"]:
-        st.divider()
-        st.markdown("**Merge Group Actions**")
-        mg_col1, mg_col2 = st.columns(2)
-        with mg_col1:
-            if st.button("Remove from Merge"):
-                dissolved = queries.remove_from_merge(session, selected_tx.id)
-                db.mark_dirty()
-                if dissolved:
-                    st.info(f"Merge group '{dissolved}' dissolved.")
-                st.rerun()
-        with mg_col2:
-            parent = session.get(Transaction, selected_tx.merge_parent_id)
-            if parent:
-                new_merge_name = st.text_input(
-                    "Rename group", value=parent.description, key="rename_merge"
-                )
-                if st.button("Rename Merge"):
-                    queries.rename_merge(session, parent.id, new_merge_name)
-                    db.mark_dirty()
-                    st.rerun()
-
 
 # ---------------------------------------------------------------------------
 # Tab 4: Analysis
@@ -636,6 +616,11 @@ with st.sidebar:
         ],
     )
     st.divider()
+
+    # Migration notice
+    if st.session_state.get("migrated"):
+        st.info("Database was upgraded to the latest schema. Save to persist.")
+        del st.session_state["migrated"]
 
     # Save button
     if db.db_file_path:
