@@ -18,6 +18,7 @@ import os
 import sys
 from datetime import datetime
 from decimal import Decimal
+from urllib.parse import quote as _url_quote
 
 import streamlit as st
 from sqlalchemy import select
@@ -27,6 +28,23 @@ import db
 import queries
 import services
 from models.finance import Account, Category, Currency, Transaction
+
+
+def _make_badge_svg(text, bg_color, text_color):
+    """Create a small pill-shaped SVG badge as a data URI."""
+    width = len(text) * 7 + 16
+    svg = (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="20">'
+        f'<rect rx="10" width="{width}" height="20" fill="{bg_color}"/>'
+        f'<text x="{width // 2}" y="14" font-family="system-ui,sans-serif" '
+        f'font-size="11" fill="{text_color}" text-anchor="middle">{text}</text>'
+        f"</svg>"
+    )
+    return f"data:image/svg+xml,{_url_quote(svg)}"
+
+
+_SPLIT_BADGE = _make_badge_svg("split", "#dbeafe", "#1d4ed8")
+_GROUP_BADGE = _make_badge_svg("group", "#fef3c7", "#b45309")
 
 
 def init_db():
@@ -136,9 +154,7 @@ def render_accounts_categories():
         # Create category
         st.markdown("**Create Category**")
         with st.form("create_category", clear_on_submit=True):
-            cat_path = st.text_input(
-                "Category Path", placeholder="e.g. travel/flights"
-            )
+            cat_path = st.text_input("Category Path", placeholder="e.g. travel/flights")
             if st.form_submit_button("Create"):
                 if not cat_path:
                     st.error("Path is required.")
@@ -180,9 +196,7 @@ def render_accounts_categories():
                             st.error(f"Error: {e}")
 
             with delete_col:
-                child_count, tx_count = queries.get_category_delete_stats(
-                    session, selected_cat.id
-                )
+                child_count, tx_count = queries.get_category_delete_stats(session, selected_cat.id)
                 st.caption(
                     f"Deleting will affect {child_count} sub-categories "
                     f"and {tx_count} transactions."
@@ -209,20 +223,15 @@ def render_import():
     st.subheader("Import Transactions")
 
     accounts = queries.get_all_accounts_with_balances(session)
-    accounts_with_spec = [
-        (acc, bal) for acc, bal in accounts if acc.mapping_spec
-    ]
+    accounts_with_spec = [(acc, bal) for acc, bal in accounts if acc.mapping_spec]
 
     if not accounts_with_spec:
         st.warning(
-            "No accounts with a mapping spec found. "
-            "Create an account with a mapping spec first."
+            "No accounts with a mapping spec found. " "Create an account with a mapping spec first."
         )
         return
 
-    account_labels = {
-        f"{acc.name} ({acc.currency.value})": acc for acc, _ in accounts_with_spec
-    }
+    account_labels = {f"{acc.name} ({acc.currency.value})": acc for acc, _ in accounts_with_spec}
     selected_label = st.selectbox("Select Account", list(account_labels.keys()))
     selected_account = account_labels[selected_label]
 
@@ -230,8 +239,7 @@ def render_import():
     latest_date = services.get_latest_transaction_date(session, selected_account.id)
     if latest_date:
         st.info(
-            f"Latest transaction for this account: "
-            f"**{latest_date.strftime('%Y-%m-%d %H:%M')}**"
+            f"Latest transaction for this account: " f"**{latest_date.strftime('%Y-%m-%d %H:%M')}**"
         )
 
     uploaded_file = st.file_uploader("Upload CSV file", type=["csv"])
@@ -251,9 +259,7 @@ def render_import():
 
                 # Check for older transactions warning
                 if latest_date:
-                    new_latest = services.get_latest_transaction_date(
-                        session, selected_account.id
-                    )
+                    new_latest = services.get_latest_transaction_date(session, selected_account.id)
                     if new_latest and new_latest <= latest_date:
                         st.warning(
                             "All imported transactions are older than or equal to "
@@ -281,23 +287,15 @@ def render_transactions():
     account_labels = ["All Accounts"] + [
         f"{acc.name} ({acc.currency.value})" for acc, _ in accounts
     ]
-    account_map = {
-        f"{acc.name} ({acc.currency.value})": acc for acc, _ in accounts
-    }
+    account_map = {f"{acc.name} ({acc.currency.value})": acc for acc, _ in accounts}
 
-    selected_account_label = st.selectbox(
-        "Account", account_labels, key="tx_account"
-    )
+    selected_account_label = st.selectbox("Account", account_labels, key="tx_account")
 
     all_accounts = selected_account_label == "All Accounts"
-    account_id = (
-        None if all_accounts else account_map[selected_account_label].id
-    )
+    account_id = None if all_accounts else account_map[selected_account_label].id
 
-    total_count, total_unreviewed, rows, category_paths = (
-        queries.load_transaction_page(
-            session, account_id=account_id, all_accounts=all_accounts
-        )
+    total_count, total_unreviewed, rows, category_paths = queries.load_transaction_page(
+        session, account_id=account_id, all_accounts=all_accounts
     )
 
     st.caption(
@@ -308,6 +306,23 @@ def render_transactions():
     if not rows:
         st.info("No transactions found.")
         return
+
+    # --- Collect split parent info ---
+    split_parent_ids = {
+        row[0].split_parent_id for row in rows if row[0].split_parent_id is not None
+    }
+    parent_info_map = {}
+    if split_parent_ids:
+        parents = (
+            session.execute(
+                select(Transaction)
+                .options(selectinload(Transaction.account))
+                .where(Transaction.id.in_(split_parent_ids))
+            )
+            .scalars()
+            .all()
+        )
+        parent_info_map = {p.id: p for p in parents}
 
     # --- Build display rows ---
     display_rows = []
@@ -321,25 +336,48 @@ def render_transactions():
             acc_name = None
 
         # Determine if this is a merge header
-        is_merge_header = tx.merge_parent_id is None and merge_group_name is not None and merge_net is not None
+        is_merge_header = (
+            tx.merge_parent_id is None and merge_group_name is not None and merge_net is not None
+        )
         # Check if this might be a merge parent (header row)
-        has_children = session.execute(
-            select(Transaction.id).where(Transaction.merge_parent_id == tx.id).limit(1)
-        ).first() is not None if is_merge_header else False
+        has_children = (
+            session.execute(
+                select(Transaction.id).where(Transaction.merge_parent_id == tx.id).limit(1)
+            ).first()
+            is not None
+            if is_merge_header
+            else False
+        )
 
         is_split_child = tx.split_parent_id is not None
         is_merge_child = tx.merge_parent_id is not None
 
-        desc = tx.description
+        # Badge for split/group indicators
+        badge = None
         if is_split_child:
-            desc = f"  [split] {desc}"
+            badge = _SPLIT_BADGE
+        elif has_children:
+            badge = _GROUP_BADGE
+
+        # Description formatting
+        desc = tx.description
         if is_merge_child and not all_accounts:
-            if not all_accounts and row[4]:  # is_cross_account
-                desc = f"{desc} [m+]"
+            if row[4]:  # is_cross_account
+                desc = f"{desc} ⊕"
             else:
-                desc = f"  [merge] {desc}"
+                desc = f"    ↳ {desc}"
         if has_children:
-            desc = f"[GROUP] {desc}"
+            desc = f"▸ {desc}"
+
+        # Split parent tooltip info
+        split_parent_info = None
+        if is_split_child and tx.split_parent_id in parent_info_map:
+            p = parent_info_map[tx.split_parent_id]
+            split_parent_info = (
+                f"{p.description} ({p.date.strftime('%Y-%m-%d')}, "
+                f"{p.account.name}, {p.original_currency.value} "
+                f"{p.value_in_account_currency:.2f})"
+            )
 
         cat_path = category_paths.get(tx.category_id, "") if tx.category_id else ""
 
@@ -349,6 +387,7 @@ def render_transactions():
                 "select": False,
                 "date": tx.date.strftime("%Y-%m-%d"),
                 "description": desc,
+                "badge": badge,
                 "category": cat_path if cat_path else None,
                 "amount": float(tx.value_in_account_currency),
                 "currency": tx.original_currency.value,
@@ -357,12 +396,30 @@ def render_transactions():
                 "_tx": tx,
                 "_is_merge_header": has_children,
                 "_is_merge_child": is_merge_child,
+                "_split_parent_info": split_parent_info,
             }
         )
 
     if not display_rows:
         st.info("No transactions found.")
         return
+
+    # --- Split parent info panel ---
+    split_rows = [
+        (r["description"], r["_split_parent_info"])
+        for r in display_rows
+        if r.get("_split_parent_info")
+    ]
+    if split_rows:
+        info_html = (
+            '<div style="margin:0 0 12px;padding:8px 12px;background:#f0f4ff;'
+            'border-radius:8px;border-left:3px solid #3b82f6;font-size:0.85em;">'
+            "<b>Split transactions</b>"
+        )
+        for desc, parent in split_rows:
+            info_html += f'<div style="margin:2px 0;">' f"<b>{desc}</b> — split from {parent}</div>"
+        info_html += "</div>"
+        st.markdown(info_html, unsafe_allow_html=True)
 
     # --- Display table with inline editing ---
     import pandas as pd
@@ -371,7 +428,16 @@ def render_transactions():
     cat_options_list = [p for _, p in cat_path_list]
     cat_path_to_id = {p: cid for cid, p in cat_path_list}
 
-    cols = ["select", "date", "description", "category", "amount", "currency", "reviewed"]
+    cols = [
+        "select",
+        "date",
+        "description",
+        "badge",
+        "category",
+        "amount",
+        "currency",
+        "reviewed",
+    ]
     if all_accounts:
         cols.insert(2, "account")
 
@@ -380,9 +446,17 @@ def render_transactions():
         df,
         use_container_width=True,
         hide_index=True,
-        disabled=["date", "account", "description", "amount", "currency"],
+        disabled=[
+            "date",
+            "account",
+            "description",
+            "badge",
+            "amount",
+            "currency",
+        ],
         column_config={
             "select": st.column_config.CheckboxColumn("", default=False, width="small"),
+            "badge": st.column_config.ImageColumn("", width="small"),
             "reviewed": st.column_config.CheckboxColumn("reviewed", default=False),
             "category": st.column_config.SelectboxColumn(
                 "category", options=cat_options_list, default=None

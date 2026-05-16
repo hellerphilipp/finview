@@ -33,14 +33,10 @@ The app has four tabs accessible via the sidebar:
 
 **Import Transactions**: Upload a CSV file, select an account with a mapping spec, and import. A warning is shown if imported transactions are older than the latest existing transaction (potential duplicates).
 
-**Transactions**: View, search, and manage transactions:
-- Filter by account
-- Search by description
-- Toggle reviewed status
-- Assign categories
-- Split transactions into parts
-- Merge related transactions into groups
-- Edit descriptions
+**Transactions**: View and manage transactions in an editable table:
+- Filter by account; use the built-in toolbar search to find transactions
+- Toggle reviewed status and assign categories directly in the table (click "Apply Changes" to save)
+- Select rows via checkboxes for bulk actions: split, merge, or edit descriptions
 
 **Analysis**: Coming soon.
 
