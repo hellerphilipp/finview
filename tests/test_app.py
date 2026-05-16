@@ -1,14 +1,16 @@
 import csv
 import os
-import pytest
 from datetime import datetime
 from decimal import Decimal
 
-import db
-from models.finance import Account, Currency, Transaction
-from ui.app import FinViewApp
-from ui.widgets import AccountSidebar, AccountItem, TransactionTable
+import pytest
 from textual.widgets import Input
+
+import db
+import queries
+from models.finance import Account, Category, Currency, Transaction
+from ui.app import FinViewApp
+from ui.widgets import AccountItem, AccountSidebar, CategoryItem, CategorySidebar, TransactionTable
 
 
 class TestRefreshCycle:
@@ -53,8 +55,21 @@ class TestCSVImportEndToEnd:
         csv_path = str(tmp_path / "transactions.csv")
         with open(csv_path, "w", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow(["Date", "Merchant", "Detail", "", "Currency", "Amount", "OrigCurrency", "OrigAmount"])
-            writer.writerow(["10.01.2025", "Migros", "Migros Zurich", "", "CHF", "55.30", "CHF", "55.30"])
+            writer.writerow(
+                [
+                    "Date",
+                    "Merchant",
+                    "Detail",
+                    "",
+                    "Currency",
+                    "Amount",
+                    "OrigCurrency",
+                    "OrigAmount",
+                ]
+            )
+            writer.writerow(
+                ["10.01.2025", "Migros", "Migros Zurich", "", "CHF", "55.30", "CHF", "55.30"]
+            )
             writer.writerow(["12.01.2025", "SBB", "", "", "CHF", "22.00", "", ""])
 
         async with finview_app.run_test() as pilot:
@@ -66,11 +81,7 @@ class TestCSVImportEndToEnd:
             await pilot.pause()
 
             # Verify transactions were imported
-            txs = (
-                pilot.app.db.query(Transaction)
-                .filter_by(account_id=acc.id)
-                .all()
-            )
+            txs = pilot.app.db.query(Transaction).filter_by(account_id=acc.id).all()
             assert len(txs) == 2
             assert any("Migros" in t.description for t in txs)
             assert any("SBB" in t.description for t in txs)
@@ -255,3 +266,117 @@ class TestSearch:
             await pilot.pause()
             assert table._search_term == ""
             assert table._search_matches == []
+
+
+class TestCategoryEndToEnd:
+    async def test_create_category(self, finview_app):
+        async with finview_app.run_test() as pilot:
+            await pilot.pause()
+            queries.create_category(pilot.app.db, "groceries")
+            pilot.app.refresh_categories()
+            await pilot.pause()
+            cat_sidebar = pilot.app.query_one("#category-sidebar", CategorySidebar)
+            items = cat_sidebar.query(CategoryItem)
+            assert any(i.category.name == "groceries" for i in items)
+
+    async def test_create_nested_category(self, finview_app):
+        async with finview_app.run_test() as pilot:
+            await pilot.pause()
+            queries.create_category(pilot.app.db, "travel/flights")
+            pilot.app.refresh_categories()
+            await pilot.pause()
+            cat_sidebar = pilot.app.query_one("#category-sidebar", CategorySidebar)
+            items = cat_sidebar.query(CategoryItem)
+            assert len(items) == 2
+            paths = {i.full_path for i in items}
+            assert "travel" in paths
+            assert "travel/flights" in paths
+
+    async def test_assign_category_to_transaction(self, sample_account, finview_app):
+        async with finview_app.run_test() as pilot:
+            await pilot.pause()
+            cat = queries.create_category(pilot.app.db, "groceries")
+            table = pilot.app.query_one(TransactionTable)
+            table.update_account(sample_account, pilot.app.db)
+            await pilot.pause()
+
+            # Get first transaction
+            row_key = table._row_locations.get_key(0)
+            tx_id = int(row_key.value)
+
+            # Assign category directly
+            queries.assign_category(pilot.app.db, tx_id, cat.id)
+            table._load_transactions()
+            await pilot.pause()
+
+            cat_val = str(table.get_cell(row_key, "category"))
+            assert cat_val == "groceries"
+
+    async def test_unassign_category(self, sample_account_with_categories, finview_app):
+        async with finview_app.run_test() as pilot:
+            await pilot.pause()
+            acc, travel, flights = sample_account_with_categories
+            table = pilot.app.query_one(TransactionTable)
+            table.update_account(acc, pilot.app.db)
+            await pilot.pause()
+
+            # Find the transaction with travel category
+            tx = (
+                pilot.app.db.query(Transaction)
+                .filter_by(account_id=acc.id, category_id=travel.id)
+                .first()
+            )
+
+            queries.assign_category(pilot.app.db, tx.id, None)
+            table._load_transactions()
+            await pilot.pause()
+
+            from textual.widgets._data_table import RowKey
+
+            cat_val = str(table.get_cell(RowKey(str(tx.id)), "category"))
+            assert cat_val == ""
+
+    async def test_delete_category_nullifies_transactions(
+        self, sample_account_with_categories, finview_app
+    ):
+        async with finview_app.run_test() as pilot:
+            await pilot.pause()
+            acc, travel, flights = sample_account_with_categories
+            flights_id = flights.id
+            tx = (
+                pilot.app.db.query(Transaction)
+                .filter_by(account_id=acc.id, category_id=flights_id)
+                .first()
+            )
+            tx_id = tx.id
+
+            queries.delete_category(pilot.app.db, flights_id)
+            pilot.app.db.refresh(tx)
+            assert tx.category_id is None
+
+    async def test_rename_category(self, sample_category, finview_app):
+        async with finview_app.run_test() as pilot:
+            await pilot.pause()
+            travel, flights = sample_category
+            flights = pilot.app.db.merge(flights)
+            queries.rename_category(pilot.app.db, flights.id, "hotels")
+            pilot.app.db.refresh(flights)
+            assert flights.name == "hotels"
+
+    async def test_rename_duplicate_rejected(self, finview_app):
+        async with finview_app.run_test() as pilot:
+            await pilot.pause()
+            queries.create_category(pilot.app.db, "a")
+            b = queries.create_category(pilot.app.db, "b")
+            with pytest.raises(ValueError, match="already exists"):
+                queries.rename_category(pilot.app.db, b.id, "a")
+
+    async def test_refresh_includes_categories(self, sample_category, finview_app):
+        async with finview_app.run_test() as pilot:
+            await pilot.pause()
+            # Categories should be loaded after refresh
+            pilot.app.action_refresh()
+            await pilot.pause()
+            cat_sidebar = pilot.app.query_one("#category-sidebar", CategorySidebar)
+            items = cat_sidebar.query(CategoryItem)
+            assert len(items) == 2

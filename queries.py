@@ -19,11 +19,11 @@ import datetime
 import os
 from decimal import Decimal
 
-from sqlalchemy import select, func, case
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session, selectinload
 
 from importers.engine import CSVImporter
-from models.finance import Account, Currency, Transaction
+from models.finance import Account, Category, Currency, Transaction
 
 
 def get_all_accounts_with_balances(session: Session) -> list[tuple[Account, Decimal]]:
@@ -106,23 +106,176 @@ def _is_cross_account_merge_subquery():
     """
     MergeSibling = Transaction.__table__.alias("merge_sibling_acc")
     return (
-        select(
-            func.count(func.distinct(MergeSibling.c.account_id)) > 1
-        )
+        select(func.count(func.distinct(MergeSibling.c.account_id)) > 1)
         .where(MergeSibling.c.merge_parent_id == Transaction.merge_parent_id)
         .correlate(Transaction.__table__)
         .scalar_subquery()
     )
 
 
+# --- Category operations ---
+
+
+def _build_category_path_map(
+    session: Session,
+) -> dict[int, str]:
+    """Load all categories and build a {category_id: full_path} mapping."""
+    all_cats = session.execute(select(Category)).scalars().all()
+    by_id = {c.id: c for c in all_cats}
+    result = {}
+    for cat in all_cats:
+        parts = []
+        node = cat
+        while node is not None:
+            parts.append(node.name)
+            node = by_id.get(node.parent_id) if node.parent_id else None
+        result[cat.id] = "/".join(reversed(parts))
+    return result
+
+
+def get_all_category_paths(session: Session) -> list[tuple[int, str]]:
+    """Return (category_id, full_path) for all categories, sorted alphabetically."""
+    path_map = _build_category_path_map(session)
+    return sorted(path_map.items(), key=lambda x: x[1].lower())
+
+
+def get_categories_with_transaction_counts(
+    session: Session,
+) -> list[tuple[Category, int, str]]:
+    """Return all categories with direct transaction counts and full paths.
+
+    Returns list of (Category, count, full_path) sorted by full_path.
+    """
+    stmt = (
+        select(Category, func.count(Transaction.id))
+        .outerjoin(Transaction, Category.id == Transaction.category_id)
+        .group_by(Category.id)
+    )
+    rows = session.execute(stmt).all()
+    path_map = _build_category_path_map(session)
+    result = [(cat, count, path_map.get(cat.id, cat.name)) for cat, count in rows]
+    result.sort(key=lambda x: x[2].lower())
+    return result
+
+
+def create_category(session: Session, path_string: str) -> Category:
+    """Create a category from a '/'-separated path, reusing existing ancestors.
+
+    E.g., 'travel/flights' creates 'travel' (if missing) then 'flights' under it.
+    """
+    segments = [s.strip() for s in path_string.split("/") if s.strip()]
+    if not segments:
+        raise ValueError("Category path cannot be empty")
+
+    parent_id = None
+    cat = None
+    for segment in segments:
+        existing = session.execute(
+            select(Category).where(
+                Category.name == segment,
+                (
+                    Category.parent_id == parent_id
+                    if parent_id is not None
+                    else Category.parent_id.is_(None)
+                ),
+            )
+        ).scalar_one_or_none()
+        if existing:
+            cat = existing
+        else:
+            cat = Category(name=segment, parent_id=parent_id)
+            session.add(cat)
+            session.flush()
+        parent_id = cat.id
+
+    session.commit()
+    return cat
+
+
+def rename_category(session: Session, category_id: int, new_name: str) -> Category:
+    """Rename a category's leaf name. Rejects '/' in new name and duplicate siblings."""
+    if "/" in new_name:
+        raise ValueError("Category name cannot contain '/'")
+    new_name = new_name.strip()
+    if not new_name:
+        raise ValueError("Category name cannot be empty")
+
+    cat = session.get(Category, category_id)
+    if cat is None:
+        raise ValueError("Category not found")
+
+    # Check for duplicate sibling
+    dup = session.execute(
+        select(Category).where(
+            Category.name == new_name,
+            (
+                Category.parent_id == cat.parent_id
+                if cat.parent_id is not None
+                else Category.parent_id.is_(None)
+            ),
+            Category.id != cat.id,
+        )
+    ).scalar_one_or_none()
+    if dup:
+        raise ValueError(f"A sibling category named '{new_name}' already exists")
+
+    cat.name = new_name
+    session.commit()
+    return cat
+
+
+def delete_category(session: Session, category_id: int) -> None:
+    """Delete a category. CASCADE FK handles children; SET NULL handles transactions."""
+    cat = session.get(Category, category_id)
+    if cat is None:
+        raise ValueError("Category not found")
+    session.delete(cat)
+    session.commit()
+
+
+def get_category_delete_stats(session: Session, category_id: int) -> tuple[int, int]:
+    """Return (descendant_count, affected_transaction_count) for deletion confirmation."""
+
+    def _collect_descendant_ids(cid: int) -> list[int]:
+        children = (
+            session.execute(select(Category.id).where(Category.parent_id == cid)).scalars().all()
+        )
+        ids = list(children)
+        for child_id in children:
+            ids.extend(_collect_descendant_ids(child_id))
+        return ids
+
+    descendant_ids = _collect_descendant_ids(category_id)
+    all_ids = [category_id] + descendant_ids
+
+    tx_count = (
+        session.execute(
+            select(func.count(Transaction.id)).where(Transaction.category_id.in_(all_ids))
+        ).scalar()
+        or 0
+    )
+
+    return len(descendant_ids), tx_count
+
+
+def assign_category(session: Session, transaction_id: int, category_id: int | None) -> Transaction:
+    """Assign (or unassign with None) a category to a transaction."""
+    tx = session.get(Transaction, transaction_id)
+    if tx is None:
+        raise ValueError("Transaction not found")
+    tx.category_id = category_id
+    session.commit()
+    return tx
+
+
 def load_transaction_page(
     session: Session,
     account_id: int | None = None,
     all_accounts: bool = False,
-) -> tuple[int, int, list]:
+) -> tuple[int, int, list, dict[int, str]]:
     """Load transactions and counts.
 
-    Returns (total_count, total_unreviewed, rows).
+    Returns (total_count, total_unreviewed, rows, category_path_cache).
 
     For counting: merge children are excluded, merge parents are counted as 1.
     For display: merge children are included (with merge metadata), merge parents
@@ -139,10 +292,14 @@ def load_transaction_page(
     where = None if all_accounts else (Transaction.account_id == account_id)
 
     # Count totals: exclude merge children, include merge parents as 1 each
-    count_stmt = select(
-        func.count(Transaction.id),
-        func.sum(case((Transaction.reviewed_at.is_(None), 1), else_=0)),
-    ).where(no_split_parent).where(is_not_merge_child)
+    count_stmt = (
+        select(
+            func.count(Transaction.id),
+            func.sum(case((Transaction.reviewed_at.is_(None), 1), else_=0)),
+        )
+        .where(no_split_parent)
+        .where(is_not_merge_child)
+    )
     if all_accounts:
         count_stmt = count_stmt.join(Account, Transaction.account_id == Account.id)
     if where is not None:
@@ -182,7 +339,8 @@ def load_transaction_page(
     else:
         rows = _group_merge_children_single_account(session, rows)
 
-    return total_count, total_unreviewed, rows
+    category_paths = _build_category_path_map(session)
+    return total_count, total_unreviewed, rows, category_paths
 
 
 def _group_merge_children_all_accounts(session, rows):
@@ -209,9 +367,9 @@ def _group_merge_children_all_accounts(session, rows):
     parent_ids = list(merge_groups.keys())
     parents = {
         p.id: p
-        for p in session.execute(
-            select(Transaction).where(Transaction.id.in_(parent_ids))
-        ).scalars().all()
+        for p in session.execute(select(Transaction).where(Transaction.id.in_(parent_ids)))
+        .scalars()
+        .all()
     }
 
     # Build result: insert group at earliest child's date position
@@ -282,9 +440,9 @@ def _group_merge_children_single_account(session, rows):
     parent_ids = list(merge_groups.keys())
     parents = {
         p.id: p
-        for p in session.execute(
-            select(Transaction).where(Transaction.id.in_(parent_ids))
-        ).scalars().all()
+        for p in session.execute(select(Transaction).where(Transaction.id.in_(parent_ids)))
+        .scalars()
+        .all()
     }
 
     result = list(normal_rows)
@@ -352,9 +510,10 @@ def create_merge(session: Session, tx_ids: list[int], name: str) -> Transaction:
     # Validate: none are merge parents
     existing_parent_ids = set(
         session.execute(
-            select(Transaction.merge_parent_id)
-            .where(Transaction.merge_parent_id.in_(tx_ids))
-        ).scalars().all()
+            select(Transaction.merge_parent_id).where(Transaction.merge_parent_id.in_(tx_ids))
+        )
+        .scalars()
+        .all()
     )
     for tx in txs:
         if tx.id in existing_parent_ids:
@@ -429,11 +588,14 @@ def remove_from_merge(session: Session, tx_id: int) -> str | None:
     tx.merge_parent_id = None
 
     # Count remaining children
-    remaining = session.execute(
-        select(func.count(Transaction.id))
-        .where(Transaction.merge_parent_id == parent_id)
-        .where(Transaction.id != tx_id)
-    ).scalar() or 0
+    remaining = (
+        session.execute(
+            select(func.count(Transaction.id))
+            .where(Transaction.merge_parent_id == parent_id)
+            .where(Transaction.id != tx_id)
+        ).scalar()
+        or 0
+    )
 
     if remaining <= 1:
         # Dissolve: clear remaining child's FK and delete parent
@@ -466,9 +628,11 @@ def rename_merge(session: Session, merge_parent_id: int, new_name: str) -> None:
 
 def _update_merge_parent(session: Session, parent: Transaction) -> None:
     """Recompute a merge parent's amounts and date from its children."""
-    children = session.execute(
-        select(Transaction).where(Transaction.merge_parent_id == parent.id)
-    ).scalars().all()
+    children = (
+        session.execute(select(Transaction).where(Transaction.merge_parent_id == parent.id))
+        .scalars()
+        .all()
+    )
 
     if not children:
         return

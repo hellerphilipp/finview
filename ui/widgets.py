@@ -18,17 +18,24 @@ import os
 from decimal import Decimal
 
 from rich.style import Style
-from textual.css.query import NoMatches
-from textual.widgets import ListItem, ListView, DataTable, Label, Static
-from textual.containers import Horizontal
-from textual.binding import Binding
-
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
-from models.finance import Account, Transaction
-from .screens import ImportFileDialog, SplitTransactionScreen, MergeTransactionScreen, MergeActionScreen
+from textual.binding import Binding
+from textual.containers import Horizontal, Vertical
+from textual.css.query import NoMatches
+from textual.widgets import DataTable, Input, Label, ListItem, ListView, OptionList, Static
+from textual.widgets.option_list import Option
+
 import db
 import queries
+from models.finance import Account, Category, Transaction
+
+from .screens import (
+    ImportFileDialog,
+    MergeActionScreen,
+    MergeTransactionScreen,
+    SplitTransactionScreen,
+)
 
 REVIEWED_BG = Style(bgcolor="dark_green")
 UNREVIEWED_BG = Style(bgcolor="dark_red")
@@ -38,6 +45,7 @@ BASE_COLUMNS = [
     ("#", "row_num"),
     ("Date & Time", "date"),
     ("Description", "description"),
+    ("Category", "category"),
     ("Amount", "amount"),
     ("Currency", "currency"),
     ("Reviewed", "reviewed"),
@@ -49,13 +57,87 @@ ACCOUNT_COLUMN = ("Account", "account")
 MERGE_HEADER_KEY_PREFIX = "merge_header_"
 
 
+class SidebarSection(Vertical):
+    """Collapsible sidebar section wrapping a header and a ListView."""
+
+    def __init__(self, title: str, *children, collapsed: bool = False, **kwargs):
+        super().__init__(*children, **kwargs)
+        self._title = title
+        self._collapsed = collapsed
+        self._count = 0
+
+    def compose(self):
+        yield Static(self._header_text(), classes="section-header")
+
+    def on_mount(self):
+        if self._collapsed:
+            self._apply_collapsed()
+
+    def _header_text(self) -> str:
+        arrow = "▶" if self._collapsed else "▼"
+        count_str = f" ({self._count})" if self._collapsed else ""
+        return f"{arrow} {self._title}{count_str}"
+
+    def _update_header(self):
+        try:
+            header = self.query_one(".section-header", Static)
+            header.update(self._header_text())
+        except Exception:
+            pass
+
+    def set_count(self, n: int):
+        self._count = n
+        self._update_header()
+
+    @property
+    def collapsed(self) -> bool:
+        return self._collapsed
+
+    def expand(self):
+        if not self._collapsed:
+            return
+        self._collapsed = False
+        self._update_header()
+        # Show the ListView child
+        for child in self.children:
+            if isinstance(child, ListView):
+                child.display = True
+                break
+        self.styles.height = "1fr"
+
+    def collapse(self):
+        if self._collapsed:
+            return
+        self._collapsed = True
+        self._update_header()
+        # Hide the ListView child
+        for child in self.children:
+            if isinstance(child, ListView):
+                child.display = False
+                break
+        self.styles.height = "auto"
+
+    def _apply_collapsed(self):
+        """Apply collapsed state after mount."""
+        for child in self.children:
+            if isinstance(child, ListView):
+                child.display = False
+                break
+        self.styles.height = "auto"
+        self._update_header()
+
+
 class AccountSidebar(ListView):
     BINDINGS = [
         Binding("c", "create_account", "New Account", show=True),
+        Binding("tab", "switch_to_categories", "Categories", show=False),
     ]
 
     def action_create_account(self):
         self.app.action_create_account()
+
+    def action_switch_to_categories(self):
+        self.app.switch_sidebar("categories")
 
 
 class AllAccountsItem(ListItem):
@@ -75,6 +157,203 @@ class AccountItem(ListItem):
             Label(f"{self._balance:.2f} {self.account.currency.value}", classes="acc-bal"),
         )
 
+
+class CategorySidebar(ListView):
+    BINDINGS = [
+        Binding("c", "create_category", "New Category", show=True),
+        Binding("d", "delete_category", "Delete", show=True),
+        Binding("e", "rename_category", "Rename", show=True),
+        Binding("tab", "switch_to_accounts", "Accounts", show=False),
+    ]
+
+    def action_create_category(self):
+        self.app.action_create_category()
+
+    def action_delete_category(self):
+        self.app.action_delete_category()
+
+    def action_rename_category(self):
+        self.app.action_rename_category()
+
+    def action_switch_to_accounts(self):
+        self.app.switch_sidebar("accounts")
+
+
+class AllCategoriesItem(ListItem):
+    # TODO: category filtering — when selected, show all transactions
+    def compose(self):
+        yield Label("All Categories")
+
+
+class CategoryItem(ListItem):
+    """A category entry in the sidebar with tree-style indentation."""
+
+    def __init__(
+        self,
+        category,
+        full_path: str,
+        depth: int = 0,
+        transaction_count: int = 0,
+        is_last_child: bool = False,
+    ):
+        super().__init__()
+        self.category = category
+        self.full_path = full_path
+        self._depth = depth
+        self._transaction_count = transaction_count
+        self._is_last_child = is_last_child
+
+    def compose(self):
+        indent = ""
+        if self._depth > 0:
+            prefix = "└─ " if self._is_last_child else "├─ "
+            indent = "  " * (self._depth - 1) + prefix
+        name = f"{indent}{self.category.name}"
+        count = str(self._transaction_count) if self._transaction_count > 0 else ""
+        yield Horizontal(
+            Label(name, classes="cat-name"),
+            Label(count, classes="cat-count"),
+        )
+
+
+class CategoryAutocomplete(Vertical):
+    """Floating overlay for inline category assignment using textual-autocomplete."""
+
+    DEFAULT_CSS = """
+    CategoryAutocomplete {
+        layer: overlay;
+        width: 50;
+        max-height: 50%;
+        height: auto;
+        background: $surface;
+        border: thick $primary;
+        padding: 1;
+    }
+    CategoryAutocomplete Input {
+        width: 100%;
+        margin-bottom: 1;
+    }
+    CategoryAutocomplete OptionList {
+        height: auto;
+        max-height: 15;
+    }
+    """
+
+    CREATE_PREFIX = "✚ Create: "
+
+    def __init__(
+        self,
+        session,
+        category_paths: list[tuple[int, str]],
+        current_category_id: int | None = None,
+    ):
+        super().__init__()
+        self._session = session
+        self._category_paths = category_paths
+        self._current_category_id = current_category_id
+        self._selected_id: int | None = None
+        self._dismissed = False
+
+        # Pre-fill text
+        self._prefill = ""
+        if current_category_id is not None:
+            for cid, path in category_paths:
+                if cid == current_category_id:
+                    self._prefill = path
+                    break
+
+    def compose(self):
+        yield Input(value=self._prefill, placeholder="Type category name...")
+        yield OptionList()
+
+    def on_mount(self):
+        self.query_one(Input).focus()
+        self._filter_options(self._prefill)
+
+    def _filter_options(self, text: str):
+        option_list = self.query_one(OptionList)
+        option_list.clear_options()
+        text_lower = text.strip().lower()
+
+        has_exact = False
+        for cid, path in self._category_paths:
+            if not text_lower or text_lower in path.lower():
+                option_list.add_option(Option(path, id=str(cid)))
+                if path.lower() == text_lower:
+                    has_exact = True
+
+        # If typed text doesn't exactly match any category, offer to create
+        if text.strip() and not has_exact:
+            option_list.add_option(Option(f"{self.CREATE_PREFIX}{text.strip()}", id="__create__"))
+
+    def on_input_changed(self, event: Input.Changed):
+        self._filter_options(event.value)
+
+    def on_key(self, event):
+        option_list = self.query_one(OptionList)
+        inp = self.query_one(Input)
+
+        if event.key == "escape":
+            event.prevent_default()
+            event.stop()
+            self._dismiss(None)
+            return
+
+        if event.key == "tab":
+            event.prevent_default()
+            event.stop()
+            # Empty input = unassign
+            if not inp.value.strip():
+                self._dismiss(None, unassign=True)
+                return
+            # Confirm highlighted option
+            highlighted = option_list.highlighted
+            if highlighted is not None:
+                option = option_list.get_option_at_index(highlighted)
+                self._select_option(option)
+            return
+
+        if event.key == "down":
+            event.prevent_default()
+            event.stop()
+            option_list.action_cursor_down()
+            return
+
+        if event.key == "up":
+            event.prevent_default()
+            event.stop()
+            option_list.action_cursor_up()
+            return
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected):
+        self._select_option(event.option)
+
+    def _select_option(self, option: Option):
+        if option.id == "__create__":
+            text = self.query_one(Input).value.strip()
+            try:
+                cat = queries.create_category(self._session, text)
+                db.mark_dirty()
+                self.app.notify(f"Created: {text}")
+                self._dismiss(cat.id)
+            except ValueError as e:
+                self.app.notify(str(e), severity="error")
+        else:
+            self._dismiss(int(option.id))
+
+    def _dismiss(self, category_id: int | None, unassign: bool = False):
+        if self._dismissed:
+            return
+        self._dismissed = True
+        callback = getattr(self, "_on_result", None)
+        if callback:
+            if unassign:
+                callback("__unassign__")
+            else:
+                callback(category_id)
+        self.remove()
+
+
 class TransactionTable(DataTable):
     BINDINGS = [
         Binding("escape", "focus_sidebar", "Sidebar", show=True),
@@ -82,6 +361,7 @@ class TransactionTable(DataTable):
         Binding("enter", "toggle_reviewed", "Reviewed", show=True),
         Binding("s", "split_transaction", "Split", show=True),
         Binding("m", "merge_transaction", "Merge", show=True),
+        Binding("t", "tag_category", "Tag", show=True),
     ]
 
     def on_mount(self):
@@ -97,6 +377,7 @@ class TransactionTable(DataTable):
         self._search_term: str = ""
         self._search_matches: list[int] = []
         self._search_index: int = -1
+        self._category_paths: dict[int, str] = {}
         # Merge pending state
         self._merge_pending_tx_id: int | None = None  # for new merges
         self._merge_pending_parent_id: int | None = None  # for add-to-group
@@ -127,9 +408,17 @@ class TransactionTable(DataTable):
         for label, key in cols:
             self.add_column(label, key=key)
 
-    def _row_cells(self, tx, row_num, account_name=None, merge_net=None,
-                   merge_reviewed=None, merge_group_name=None,
-                   is_last_merge_child=False, is_cross_account_merge=False):
+    def _row_cells(
+        self,
+        tx,
+        row_num,
+        account_name=None,
+        merge_net=None,
+        merge_reviewed=None,
+        merge_group_name=None,
+        is_last_merge_child=False,
+        is_cross_account_merge=False,
+    ):
         """Return plain cell values for a transaction."""
         cells = [
             str(row_num),
@@ -151,15 +440,26 @@ class TransactionTable(DataTable):
                 prefix = "  └─ " if is_last_merge_child else "  ├─ "
                 desc = f"{prefix}{desc}"
 
-        cells.extend([
-            desc,
-            f"{tx.original_value:>10.2f}",
-            tx.original_currency.value,
-        ])
+        # Category column
+        # TODO: for deeply nested categories, consider truncating parent segments with ellipses
+        cat_path = self._category_paths.get(tx.category_id, "") if tx.category_id else ""
+
+        cells.extend(
+            [
+                desc,
+                cat_path,
+                f"{tx.original_value:>10.2f}",
+                tx.original_currency.value,
+            ]
+        )
 
         # Reviewed column: cross-account merge children use their own status;
         # same-account merge children inherit from parent
-        if tx.merge_parent_id is not None and merge_reviewed is not None and not is_cross_account_merge:
+        if (
+            tx.merge_parent_id is not None
+            and merge_reviewed is not None
+            and not is_cross_account_merge
+        ):
             cells.append("Yes" if merge_reviewed else "No")
         else:
             cells.append("Yes" if tx.reviewed_at else "No")
@@ -174,12 +474,15 @@ class TransactionTable(DataTable):
         ]
         if account_name is not None:
             cells.append(account_name)
-        cells.extend([
-            parent_tx.description,
-            f"{net:>10.2f}",
-            currency,
-            "Yes" if parent_tx.reviewed_at else "No",
-        ])
+        cells.extend(
+            [
+                parent_tx.description,
+                "",  # Category column (empty for merge headers)
+                f"{net:>10.2f}",
+                currency,
+                "Yes" if parent_tx.reviewed_at else "No",
+            ]
+        )
         return tuple(cells)
 
     def _update_banner(self):
@@ -263,11 +566,12 @@ class TransactionTable(DataTable):
         """Load all transactions and update counts from DB."""
         session = self._session
         account_id = None if self._all_accounts_mode else self.current_account.id
-        total_count, total_unreviewed, rows = queries.load_transaction_page(
+        total_count, total_unreviewed, rows, category_paths = queries.load_transaction_page(
             session, account_id=account_id, all_accounts=self._all_accounts_mode
         )
         self._total_count = total_count
         self._total_unreviewed = total_unreviewed
+        self._category_paths = category_paths
 
         # Clear rows only, keep columns
         self.clear()
@@ -286,7 +590,7 @@ class TransactionTable(DataTable):
                 merge_group_name = row[4]
 
                 # Check if this is a merge header row
-                is_header = (account_name == "–")
+                is_header = account_name == "–"
 
                 if is_header:
                     key = f"{MERGE_HEADER_KEY_PREFIX}{tx.id}"
@@ -301,11 +605,15 @@ class TransactionTable(DataTable):
                     key = str(tx.id)
                     # Determine if this is the last child in its merge group
                     is_last = self._is_last_merge_child(rows, i - 1)
-                    cells = self._row_cells(tx, i, account_name=account_name,
-                                           merge_net=merge_net,
-                                           merge_reviewed=merge_reviewed,
-                                           merge_group_name=merge_group_name,
-                                           is_last_merge_child=is_last)
+                    cells = self._row_cells(
+                        tx,
+                        i,
+                        account_name=account_name,
+                        merge_net=merge_net,
+                        merge_reviewed=merge_reviewed,
+                        merge_group_name=merge_group_name,
+                        is_last_merge_child=is_last,
+                    )
                     self.add_row(*cells, key=key)
                     if tx.merge_parent_id is not None:
                         # Merge children: gray text, no background
@@ -343,11 +651,15 @@ class TransactionTable(DataTable):
                 else:
                     key = str(tx.id)
                     is_last = self._is_last_merge_child_single(rows, i - 1)
-                    cells = self._row_cells(tx, i, merge_net=merge_net,
-                                           merge_reviewed=merge_reviewed,
-                                           merge_group_name=merge_group_name,
-                                           is_last_merge_child=is_last,
-                                           is_cross_account_merge=is_cross_account)
+                    cells = self._row_cells(
+                        tx,
+                        i,
+                        merge_net=merge_net,
+                        merge_reviewed=merge_reviewed,
+                        merge_group_name=merge_group_name,
+                        is_last_merge_child=is_last,
+                        is_cross_account_merge=is_cross_account,
+                    )
                     self.add_row(*cells, key=key)
                     if tx.merge_parent_id is not None and not is_cross_account:
                         # Same-account merge children: gray text, no background
@@ -525,6 +837,7 @@ class TransactionTable(DataTable):
             self.update_cell(row_key, "reviewed", "Yes" if reviewed else "No")
             # Update only this parent's child rows' reviewed text (keep gray style)
             from textual.widgets._data_table import RowKey
+
             for child_key_value, child_parent_id in self._merge_child_to_parent.items():
                 if child_parent_id != parent_id:
                     continue
@@ -572,6 +885,57 @@ class TransactionTable(DataTable):
             self._update_page_info()
             return
         self.app.action_focus_sidebar()
+
+    # --- Category tagging ---
+
+    def action_tag_category(self):
+        if self.row_count == 0:
+            return
+
+        row_key, _ = self.coordinate_to_cell_key(self.cursor_coordinate)
+        key_value = row_key.value
+
+        # Can't tag merge headers or merge children
+        if key_value in self._merge_header_rows or key_value in self._merge_child_rows:
+            return
+
+        session = self._session or self.app.db
+        tx = session.get(Transaction, int(key_value))
+        if tx is None:
+            return
+
+        current_row = self.cursor_coordinate.row
+        cat_paths = queries.get_all_category_paths(session)
+
+        overlay = CategoryAutocomplete(session, cat_paths, current_category_id=tx.category_id)
+
+        def handle_result(result):
+            from textual.widgets._data_table import RowKey
+
+            if result == "__unassign__":
+                queries.assign_category(session, tx.id, None)
+                db.mark_dirty()
+                self.update_cell(RowKey(key_value), "category", "")
+                self._category_paths.pop(tx.category_id, None) if tx.category_id else None
+                self.app.notify("Category removed")
+            elif result is not None:
+                queries.assign_category(session, tx.id, result)
+                db.mark_dirty()
+                # Refresh category paths
+                self._category_paths = dict(queries.get_all_category_paths(session))
+                path = self._category_paths.get(result, "")
+                self.update_cell(RowKey(key_value), "category", path)
+            # Restore focus to the table at the same row
+            self.focus()
+            self.move_cursor(row=current_row)
+            # Refresh categories sidebar if it exists
+            try:
+                self.app.refresh_categories()
+            except Exception:
+                pass
+
+        overlay._on_result = handle_result
+        self.app.mount(overlay)
 
     # --- Merge ---
 
@@ -669,6 +1033,7 @@ class TransactionTable(DataTable):
 
         # Eager-load accounts
         from models.finance import Account
+
         acc1 = session.get(Account, tx1.account_id)
         acc2 = session.get(Account, tx2.account_id)
 
@@ -686,9 +1051,7 @@ class TransactionTable(DataTable):
             self._clear_merge_pending()
             self._load_transactions()
 
-        self.app.push_screen(
-            MergeTransactionScreen(tx1, tx2, acc1, acc2), handle_merge
-        )
+        self.app.push_screen(MergeTransactionScreen(tx1, tx2, acc1, acc2), handle_merge)
 
     def _show_merge_action_screen(self, parent, child_tx=None):
         def handle_action(result: str | None):
@@ -828,6 +1191,4 @@ class TransactionTable(DataTable):
             db.mark_dirty()
             self._load_transactions()
 
-        self.app.push_screen(
-            SplitTransactionScreen(root, existing), handle_split
-        )
+        self.app.push_screen(SplitTransactionScreen(root, existing), handle_split)

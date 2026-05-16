@@ -15,27 +15,31 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import os
-import yaml
+from datetime import datetime
 from decimal import Decimal
+
+import yaml
 from pydantic import ValidationError
 from textual.app import ComposeResult
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Label, Input, Button, Select, Static
-from textual.containers import Vertical, Horizontal, VerticalScroll
-from datetime import datetime
-from models.finance import Account, Currency, Transaction
+from textual.widgets import Button, Input, Label, Select, Static
+
 from importers.schema import ImporterMapping
+from models.finance import Account, Currency, Transaction
+
 
 class CreateAccountScreen(ModalScreen[dict]):
     """
     A Modal Screen to create a new account.
     Returns a dictionary with the form data or None if cancelled.
     """
+
     def get_mapping_options(self) -> list[tuple[str, str | None]]:
         """Scans ./importers, validates YAMLs, and returns list of (Display Name, Path)."""
         base_path = "./importers"
         options = [("No Mapping / Manual", None)]
-        
+
         if not os.path.exists(base_path):
             return options
 
@@ -44,13 +48,13 @@ class CreateAccountScreen(ModalScreen[dict]):
                 if f.endswith((".yaml", ".yml")):
                     full_path = os.path.join(root, f)
                     rel_path = os.path.relpath(full_path, base_path)
-                    
+
                     try:
                         with open(full_path, "r") as stream:
                             config_data = yaml.safe_load(stream)
                             # Validate using Pydantic
                             mapping = ImporterMapping(**config_data)
-                            
+
                             # Success: Use the 'name' from YAML for the display
                             display_name = f"{mapping.name} ({rel_path})"
                             options.append((display_name, rel_path))
@@ -62,23 +66,23 @@ class CreateAccountScreen(ModalScreen[dict]):
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
             yield Label("Create New Account", id="title")
-            
+
             yield Label("Account Name:")
             yield Input(placeholder="e.g. Personal Checking", id="name")
-            
+
             yield Label("Currency:")
             yield Select([(c.value, c) for c in Currency], id="currency")
-            
+
             yield Label("Import Mapping Spec:")
             yield Select(self.get_mapping_options(), id="mapping_spec", value=None)
-            
+
             yield Label("Starting Amount:")
             yield Input(placeholder="0.00", id="amount", type="number")
-            
+
             yield Label("Date (YYYY-MM-DD HH:MM:SS):")
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             yield Input(value=now_str, id="date")
-            
+
             with Horizontal(classes="buttons"):
                 yield Button("Cancel", id="cancel")
                 yield Button("Create", variant="primary", id="submit")
@@ -91,18 +95,21 @@ class CreateAccountScreen(ModalScreen[dict]):
             if not self.query_one("#name").value:
                 self.notify("Name is required", severity="error")
                 return
-                
-            self.dismiss({
-                "name": self.query_one("#name").value,
-                "currency": self.query_one("#currency").value,
-                "mapping_spec": self.query_one("#mapping_spec").value,
-                "amount": float(self.query_one("#amount").value or 0),
-                "date": datetime.strptime(self.query_one("#date").value, "%Y-%m-%d %H:%M:%S")
-            })
+
+            self.dismiss(
+                {
+                    "name": self.query_one("#name").value,
+                    "currency": self.query_one("#currency").value,
+                    "mapping_spec": self.query_one("#mapping_spec").value,
+                    "amount": float(self.query_one("#amount").value or 0),
+                    "date": datetime.strptime(self.query_one("#date").value, "%Y-%m-%d %H:%M:%S"),
+                }
+            )
 
 
 class ImportFileDialog(ModalScreen[str]):
     """A simple modal to input a file path."""
+
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
             yield Label("Enter absolute path to CSV file:")
@@ -257,7 +264,9 @@ class SplitTransactionScreen(ModalScreen[list | None]):
             type="number",
         )
         delete_btn = Button("X", id=f"split-del-{idx}", classes="split-delete", variant="error")
-        row = Horizontal(desc_input, amount_input, delete_btn, classes="split-row", id=f"split-row-{idx}")
+        row = Horizontal(
+            desc_input, amount_input, delete_btn, classes="split-row", id=f"split-row-{idx}"
+        )
         self._row_child_ids[f"split-row-{idx}"] = child_id
         return row
 
@@ -312,9 +321,7 @@ class SplitTransactionScreen(ModalScreen[list | None]):
 
         unallocated = total - allocated
         label = self.query_one("#unallocated-label", Label)
-        label.update(
-            f"Unallocated: {unallocated:.2f} {self._transaction.original_currency.value}"
-        )
+        label.update(f"Unallocated: {unallocated:.2f} {self._transaction.original_currency.value}")
 
         save_btn = self.query_one("#save", Button)
         row_count = len(rows)
@@ -330,11 +337,13 @@ class SplitTransactionScreen(ModalScreen[list | None]):
                 amount = float(amount_input.value or "0")
             except ValueError:
                 amount = 0.0
-            result.append({
-                "id": self._row_child_ids.get(row.id),
-                "description": desc_input.value,
-                "amount": amount,
-            })
+            result.append(
+                {
+                    "id": self._row_child_ids.get(row.id),
+                    "description": desc_input.value,
+                    "amount": amount,
+                }
+            )
         return result
 
 
@@ -514,3 +523,102 @@ class MergeActionScreen(ModalScreen[str | None]):
                 self.notify("Name cannot be empty", severity="error")
                 return
             self.dismiss(f"rename:{new_name}")
+
+
+class CreateCategoryScreen(ModalScreen[str | None]):
+    """Modal screen to create a new category."""
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Label("Create Category")
+            yield Label("Use / for hierarchy (e.g., travel/flights)", classes="hint")
+            yield Input(id="cat-name-input", placeholder="Category path...")
+            with Horizontal(classes="buttons"):
+                yield Button("Create", id="create", variant="primary")
+                yield Button("Cancel", id="cancel")
+
+    def on_mount(self):
+        self.query_one("#cat-name-input", Input).focus()
+
+    def on_button_pressed(self, event: Button.Pressed):
+        if event.button.id == "create":
+            name = self.query_one("#cat-name-input", Input).value.strip()
+            if not name:
+                self.notify("Category name cannot be empty", severity="error")
+                return
+            self.dismiss(name)
+        else:
+            self.dismiss(None)
+
+    def on_input_submitted(self, event: Input.Submitted):
+        name = event.value.strip()
+        if name:
+            self.dismiss(name)
+
+
+class DeleteCategoryConfirmScreen(ModalScreen[bool]):
+    """Confirmation dialog for category deletion."""
+
+    def __init__(self, category_path: str, child_count: int, transaction_count: int):
+        super().__init__()
+        self._category_path = category_path
+        self._child_count = child_count
+        self._transaction_count = transaction_count
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Label(f"Delete '{self._category_path}'?")
+            if self._child_count > 0:
+                s = "y" if self._child_count == 1 else "ies"
+                yield Label(f"This will also delete {self._child_count} subcategor{s}.")
+            if self._transaction_count > 0:
+                s = "s" if self._transaction_count != 1 else ""
+                yield Label(f"{self._transaction_count} transaction{s} will be uncategorized.")
+            with Horizontal(classes="buttons"):
+                yield Button("Delete", id="delete", variant="error")
+                yield Button("Cancel", id="cancel")
+
+    def on_button_pressed(self, event: Button.Pressed):
+        self.dismiss(event.button.id == "delete")
+
+
+class RenameCategoryScreen(ModalScreen[str | None]):
+    """Modal screen to rename a category's leaf name."""
+
+    def __init__(self, current_name: str):
+        super().__init__()
+        self._current_name = current_name
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Label("Rename Category")
+            yield Input(
+                id="rename-cat-input",
+                value=self._current_name,
+                placeholder="New name...",
+            )
+            yield Label("(Cannot contain /)", classes="hint")
+            with Horizontal(classes="buttons"):
+                yield Button("Rename", id="rename", variant="primary")
+                yield Button("Cancel", id="cancel")
+
+    def on_mount(self):
+        self.query_one("#rename-cat-input", Input).focus()
+
+    def on_button_pressed(self, event: Button.Pressed):
+        if event.button.id == "rename":
+            name = self.query_one("#rename-cat-input", Input).value.strip()
+            if not name:
+                self.notify("Name cannot be empty", severity="error")
+                return
+            if "/" in name:
+                self.notify("Name cannot contain '/'", severity="error")
+                return
+            self.dismiss(name)
+        else:
+            self.dismiss(None)
+
+    def on_input_submitted(self, event: Input.Submitted):
+        name = event.value.strip()
+        if name and "/" not in name:
+            self.dismiss(name)

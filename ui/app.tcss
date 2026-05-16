@@ -1,15 +1,42 @@
 Screen {
-    layers: sidebar main;
+    layers: sidebar main overlay;
 }
 
-#sidebar {
+#sidebar-container {
     dock: left;
     width: 35;
     background: $panel;
+}
+
+SidebarSection {
+    height: 1fr;
+}
+
+.section-header {
+    height: 1;
+    text-style: bold;
+    background: $panel;
+    padding: 0 1;
+    color: $text-muted;
+}
+
+#sidebar {
+    height: 1fr;
     border-right: tall $primary;
+    border-bottom: tall $primary;
 }
 
 #sidebar:focus-within {
+    border-right: tall $accent;
+    border-bottom: tall $accent;
+}
+
+#category-sidebar {
+    height: 1fr;
+    border-right: tall $primary;
+}
+
+#category-sidebar:focus-within {
     border-right: tall $accent;
 }
 
@@ -24,6 +51,18 @@ AccountItem > Horizontal {
 
 .acc-name { width: 60%; }
 .acc-bal { width: 40%; text-align: right; color: $accent; }
+
+CategoryItem {
+    height: 1;
+    padding: 0 1;
+}
+
+CategoryItem > Horizontal {
+    height: 1;
+}
+
+.cat-name { width: 75%; }
+.cat-count { width: 25%; text-align: right; color: $accent; }
 
 #review-banner {
     width: 1fr;
@@ -86,12 +125,18 @@ AccountItem > Horizontal {
 CreateAccountScreen,
 ImportFileDialog,
 MergeTransactionScreen,
-MergeActionScreen {
+MergeActionScreen,
+CreateCategoryScreen,
+DeleteCategoryConfirmScreen,
+RenameCategoryScreen {
     align: center middle;
 }
 
 CreateAccountScreen #dialog,
-ImportFileDialog #dialog {
+ImportFileDialog #dialog,
+CreateCategoryScreen #dialog,
+DeleteCategoryConfirmScreen #dialog,
+RenameCategoryScreen #dialog {
     width: 60;
     height: auto;
     background: $surface;
@@ -102,6 +147,18 @@ ImportFileDialog #dialog {
 CreateAccountScreen #dialog Label {
     margin-top: 1;
     margin-bottom: 1;
+}
+
+CreateCategoryScreen #dialog Label,
+DeleteCategoryConfirmScreen #dialog Label,
+RenameCategoryScreen #dialog Label {
+    margin-top: 1;
+    margin-bottom: 1;
+}
+
+.hint {
+    color: $text-muted;
+    text-style: italic;
 }
 
 .buttons {

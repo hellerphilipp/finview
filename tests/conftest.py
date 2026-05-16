@@ -1,10 +1,11 @@
-import pytest
 from datetime import datetime
 from decimal import Decimal
 
+import pytest
+
 import db
 from models.base import Base
-from models.finance import Account, Currency, Transaction
+from models.finance import Account, Category, Currency, Transaction
 
 
 @pytest.fixture()
@@ -93,6 +94,30 @@ def account_with_10_txs(session):
         )
     session.commit()
     return acc
+
+
+@pytest.fixture()
+def sample_category(session):
+    """Create a category tree: travel -> flights."""
+    travel = Category(name="travel")
+    session.add(travel)
+    session.flush()
+
+    flights = Category(name="flights", parent_id=travel.id)
+    session.add(flights)
+    session.commit()
+    return travel, flights
+
+
+@pytest.fixture()
+def sample_account_with_categories(session, sample_account, sample_category):
+    """Assign categories to some transactions in sample_account."""
+    travel, flights = sample_category
+    txs = session.query(Transaction).filter_by(account_id=sample_account.id).all()
+    txs[0].category_id = travel.id
+    txs[1].category_id = flights.id
+    session.commit()
+    return sample_account, travel, flights
 
 
 @pytest.fixture()

@@ -15,16 +15,31 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 from textual.app import App, ComposeResult
-from textual.css.query import NoMatches
-from textual.widgets import Header, Footer, Static, Input
-from textual.containers import Horizontal, Vertical
 from textual.binding import Binding
+from textual.containers import Horizontal, Vertical
+from textual.css.query import NoMatches
+from textual.widgets import Footer, Header, Input, Static
 
-from .widgets import AccountItem, AccountSidebar, AllAccountsItem, TransactionTable
-from .screens import CreateAccountScreen
 import db
 import queries
-from models.finance import Account, Transaction, Currency
+from models.finance import Account, Category, Currency, Transaction
+
+from .screens import (
+    CreateAccountScreen,
+    CreateCategoryScreen,
+    DeleteCategoryConfirmScreen,
+    RenameCategoryScreen,
+)
+from .widgets import (
+    AccountItem,
+    AccountSidebar,
+    AllAccountsItem,
+    AllCategoriesItem,
+    CategoryItem,
+    CategorySidebar,
+    SidebarSection,
+    TransactionTable,
+)
 
 
 class FinViewApp(App):
@@ -37,7 +52,9 @@ class FinViewApp(App):
 
     def on_mount(self) -> None:
         self.db = db.SessionLocal()
+        self._last_sidebar_id = "sidebar"
         self.refresh_accounts()
+        self.refresh_categories()
 
     def on_unmount(self) -> None:
         self.db.close()
@@ -55,15 +72,60 @@ class FinViewApp(App):
         sidebar.index = 0
         sidebar.focus()
 
+        # Update the accounts section header count
+        try:
+            section = self.query_one("#accounts-section", SidebarSection)
+            section.set_count(len(accounts_with_balances))
+        except NoMatches:
+            pass
+
         table = self.query_one(TransactionTable)
         table.update_all_accounts(self.db)
+
+    def refresh_categories(self):
+        """Fetch categories and repopulate the category sidebar."""
+        try:
+            cat_sidebar = self.query_one("#category-sidebar", CategorySidebar)
+        except NoMatches:
+            return
+        cat_sidebar.clear()
+        cat_sidebar.append(AllCategoriesItem())
+
+        cats_with_counts = queries.get_categories_with_transaction_counts(self.db)
+        # Build tree structure for indented display
+        cat_by_id = {cat.id: (cat, count, path) for cat, count, path in cats_with_counts}
+        # Track children per parent for is_last_child
+        children_by_parent: dict[int | None, list] = {}
+        for cat, count, path in cats_with_counts:
+            children_by_parent.setdefault(cat.parent_id, []).append(cat.id)
+
+        for cat, count, path in cats_with_counts:
+            depth = path.count("/")
+            siblings = children_by_parent.get(cat.parent_id, [])
+            is_last = siblings[-1] == cat.id if siblings else False
+            cat_sidebar.append(
+                CategoryItem(
+                    cat, full_path=path, depth=depth, transaction_count=count, is_last_child=is_last
+                )
+            )
+
+        # Update the categories section header count
+        try:
+            section = self.query_one("#categories-section", SidebarSection)
+            section.set_count(len(cats_with_counts))
+        except NoMatches:
+            pass
 
     def compose(self) -> ComposeResult:
         yield Header()
         with Horizontal():
-            sidebar = AccountSidebar(id="sidebar")
-            sidebar.border_title = "Accounts"
-            yield sidebar
+            with Vertical(id="sidebar-container"):
+                with SidebarSection("Accounts", id="accounts-section", collapsed=False):
+                    sidebar = AccountSidebar(id="sidebar")
+                    yield sidebar
+                with SidebarSection("Categories", id="categories-section", collapsed=True):
+                    cat_sidebar = CategorySidebar(id="category-sidebar")
+                    yield cat_sidebar
             with Vertical():
                 yield Static("", id="review-banner")
                 yield TransactionTable(id="main-content")
@@ -72,19 +134,48 @@ class FinViewApp(App):
         yield Input(id="search-input", placeholder="/")
         yield Footer()
 
-    def on_list_view_selected(self, message: AccountSidebar.Selected):
+    def switch_sidebar(self, target: str):
+        """Switch between account and category sidebar sections."""
+        try:
+            acc_section = self.query_one("#accounts-section", SidebarSection)
+            cat_section = self.query_one("#categories-section", SidebarSection)
+        except NoMatches:
+            return
+
+        if target == "categories":
+            acc_section.collapse()
+            cat_section.expand()
+            cat_sidebar = self.query_one("#category-sidebar", CategorySidebar)
+            cat_sidebar.focus()
+            self._last_sidebar_id = "category-sidebar"
+        else:
+            cat_section.collapse()
+            acc_section.expand()
+            acc_sidebar = self.query_one("#sidebar", AccountSidebar)
+            acc_sidebar.focus()
+            self._last_sidebar_id = "sidebar"
+
+    def on_list_view_selected(self, message):
         table = self.query_one(TransactionTable)
         if isinstance(message.item, AllAccountsItem):
             table.update_all_accounts(self.db)
-        else:
+            table.focus()
+        elif isinstance(message.item, AccountItem):
             table.update_account(message.item.account, self.db)
-        table.focus()
+            table.focus()
+        elif isinstance(message.item, (AllCategoriesItem, CategoryItem)):
+            # TODO: filter transactions by selected category
+            table.focus()
 
     def action_refresh(self):
         self.refresh_accounts()
+        self.refresh_categories()
 
     def action_focus_sidebar(self):
-        self.query_one("#sidebar").focus()
+        try:
+            self.query_one(f"#{self._last_sidebar_id}").focus()
+        except NoMatches:
+            self.query_one("#sidebar").focus()
 
     # --- Command Line ---
 
@@ -143,7 +234,7 @@ class FinViewApp(App):
         cmd_input = self.query_one("#command-input", Input)
         cmd_input.value = ""
         cmd_input.remove_class("visible")
-        self.query_one("#sidebar").focus()
+        self.action_focus_sidebar()
 
     # --- Search Input ---
 
@@ -160,6 +251,10 @@ class FinViewApp(App):
         self.query_one(TransactionTable).focus()
 
     def _handle_command(self, cmd: str):
+        # TODO: add colon command aliases for category management
+        #   e.g., :cat-new, :cat-del, :cat-rename
+        # TODO: add colon command aliases for account management
+        #   e.g., :acc-new
         if cmd.startswith(":wq"):
             path = cmd[3:].strip() or None
             self._save_db(path, quit_after=True)
@@ -261,3 +356,82 @@ class FinViewApp(App):
         except Exception as e:
             self.db.rollback()
             self.notify(f"Import failed: {str(e)}", severity="error")
+
+    # --- Category Actions ---
+
+    def action_create_category(self):
+        def handle_result(path: str | None):
+            if path is None:
+                return
+            try:
+                queries.create_category(self.db, path)
+                db.mark_dirty()
+                self.notify(f"Created category: {path}")
+                self.refresh_categories()
+            except Exception as e:
+                self.db.rollback()
+                self.notify(f"Error: {e}", severity="error")
+
+        self.push_screen(CreateCategoryScreen(), handle_result)
+
+    def action_delete_category(self):
+        try:
+            cat_sidebar = self.query_one("#category-sidebar", CategorySidebar)
+        except NoMatches:
+            return
+        selected = cat_sidebar.highlighted_child
+        if selected is None or isinstance(selected, AllCategoriesItem):
+            return
+        if not isinstance(selected, CategoryItem):
+            return
+
+        cat = selected.category
+        child_count, tx_count = queries.get_category_delete_stats(self.db, cat.id)
+
+        def handle_result(confirmed: bool):
+            if not confirmed:
+                return
+            try:
+                queries.delete_category(self.db, cat.id)
+                db.mark_dirty()
+                self.notify(f"Deleted category: {selected.full_path}")
+                self.refresh_categories()
+                # Reload transactions to clear stale category references
+                table = self.query_one(TransactionTable)
+                table._load_transactions()
+            except Exception as e:
+                self.db.rollback()
+                self.notify(f"Error: {e}", severity="error")
+
+        self.push_screen(
+            DeleteCategoryConfirmScreen(selected.full_path, child_count, tx_count),
+            handle_result,
+        )
+
+    def action_rename_category(self):
+        try:
+            cat_sidebar = self.query_one("#category-sidebar", CategorySidebar)
+        except NoMatches:
+            return
+        selected = cat_sidebar.highlighted_child
+        if selected is None or isinstance(selected, AllCategoriesItem):
+            return
+        if not isinstance(selected, CategoryItem):
+            return
+
+        cat = selected.category
+
+        def handle_result(new_name: str | None):
+            if new_name is None:
+                return
+            try:
+                queries.rename_category(self.db, cat.id, new_name)
+                db.mark_dirty()
+                self.notify(f"Renamed to: {new_name}")
+                self.refresh_categories()
+                table = self.query_one(TransactionTable)
+                table._load_transactions()
+            except ValueError as e:
+                self.notify(str(e), severity="error")
+
+        self.push_screen(RenameCategoryScreen(cat.name), handle_result)

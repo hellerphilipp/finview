@@ -1,10 +1,21 @@
-import pytest
 from datetime import datetime
 
+import pytest
+
 import db
-from models.finance import Account, Currency, Transaction
+import queries
+from models.finance import Account, Category, Currency, Transaction
 from ui.app import FinViewApp
-from ui.widgets import AccountSidebar, TransactionTable, AllAccountsItem, AccountItem
+from ui.widgets import (
+    AccountItem,
+    AccountSidebar,
+    AllAccountsItem,
+    AllCategoriesItem,
+    CategoryItem,
+    CategorySidebar,
+    SidebarSection,
+    TransactionTable,
+)
 
 
 class TestAppLaunch:
@@ -243,6 +254,7 @@ class TestVimNavigation:
             await pilot.press("g")
             await pilot.pause()
             from textual.widgets import Static
+
             info = pilot.app.query_one("#page-info", Static)
             assert "g>" in str(info.content)
 
@@ -252,6 +264,7 @@ class TestVimNavigation:
             await pilot.press("5")
             await pilot.pause()
             from textual.widgets import Static
+
             info = pilot.app.query_one("#page-info", Static)
             assert "5>" in str(info.content)
 
@@ -325,6 +338,124 @@ class TestCommandMode:
             db.mark_dirty()
             pilot.app._handle_command(":q!")
             await pilot.pause()
+
+
+class TestCategorySidebar:
+    async def test_category_sidebar_renders(self, finview_app):
+        async with finview_app.run_test() as pilot:
+            await pilot.pause()
+            cat_sidebar = pilot.app.query_one("#category-sidebar", CategorySidebar)
+            assert cat_sidebar is not None
+
+    async def test_sidebar_shows_all_categories_item(self, finview_app):
+        async with finview_app.run_test() as pilot:
+            await pilot.pause()
+            cat_sidebar = pilot.app.query_one("#category-sidebar", CategorySidebar)
+            items = cat_sidebar.query(AllCategoriesItem)
+            assert len(items) == 1
+
+    async def test_tab_switches_to_categories(self, finview_app):
+        async with finview_app.run_test() as pilot:
+            await pilot.pause()
+            acc_sidebar = pilot.app.query_one("#sidebar", AccountSidebar)
+            acc_sidebar.focus()
+            await pilot.pause()
+            await pilot.press("tab")
+            await pilot.pause()
+            cat_sidebar = pilot.app.query_one("#category-sidebar", CategorySidebar)
+            assert cat_sidebar.has_focus
+
+    async def test_tab_switches_back_to_accounts(self, finview_app):
+        async with finview_app.run_test() as pilot:
+            await pilot.pause()
+            # Switch to categories first
+            pilot.app.switch_sidebar("categories")
+            await pilot.pause()
+            cat_sidebar = pilot.app.query_one("#category-sidebar", CategorySidebar)
+            assert cat_sidebar.has_focus
+            # Tab back
+            await pilot.press("tab")
+            await pilot.pause()
+            acc_sidebar = pilot.app.query_one("#sidebar", AccountSidebar)
+            assert acc_sidebar.has_focus
+
+    async def test_auto_collapse_on_tab(self, finview_app):
+        async with finview_app.run_test() as pilot:
+            await pilot.pause()
+            acc_section = pilot.app.query_one("#accounts-section", SidebarSection)
+            cat_section = pilot.app.query_one("#categories-section", SidebarSection)
+            # Initially: accounts expanded, categories collapsed
+            assert not acc_section.collapsed
+            assert cat_section.collapsed
+            # Switch to categories
+            pilot.app.switch_sidebar("categories")
+            await pilot.pause()
+            assert acc_section.collapsed
+            assert not cat_section.collapsed
+
+    async def test_category_create_screen_opens(self, finview_app):
+        async with finview_app.run_test() as pilot:
+            await pilot.pause()
+            # Switch to category sidebar
+            pilot.app.switch_sidebar("categories")
+            await pilot.pause()
+            await pilot.press("c")
+            await pilot.pause()
+            from ui.screens import CreateCategoryScreen
+
+            assert len(pilot.app.screen_stack) > 1
+
+    async def test_escape_returns_to_sidebar(self, sample_account, finview_app):
+        async with finview_app.run_test() as pilot:
+            await pilot.pause()
+            table = pilot.app.query_one(TransactionTable)
+            table.focus()
+            await pilot.pause()
+            await pilot.press("escape")
+            await pilot.pause()
+            # Should return to last-active sidebar (accounts by default)
+            acc_sidebar = pilot.app.query_one("#sidebar", AccountSidebar)
+            assert acc_sidebar.has_focus
+
+
+class TestCategoryColumn:
+    async def test_category_column_present(self, finview_app):
+        async with finview_app.run_test() as pilot:
+            await pilot.pause()
+            table = pilot.app.query_one(TransactionTable)
+            assert "category" in table.columns
+
+    async def test_category_column_shows_path(self, sample_account_with_categories, finview_app):
+        async with finview_app.run_test() as pilot:
+            await pilot.pause()
+            acc, travel, flights = sample_account_with_categories
+            table = pilot.app.query_one(TransactionTable)
+            table.update_account(acc, pilot.app.db)
+            await pilot.pause()
+            # Find a row with a category and check the cell value
+            found = False
+            for row_idx in range(table.row_count):
+                row_key = table._row_locations.get_key(row_idx)
+                cat_val = str(table.get_cell(row_key, "category"))
+                if cat_val in ("travel", "travel/flights"):
+                    found = True
+                    break
+            assert found, "No category value found in any row"
+
+    async def test_category_tree_indentation(self, sample_category, finview_app):
+        async with finview_app.run_test() as pilot:
+            await pilot.pause()
+            cat_sidebar = pilot.app.query_one("#category-sidebar", CategorySidebar)
+            # Expand categories section
+            pilot.app.switch_sidebar("categories")
+            await pilot.pause()
+            # Should have AllCategoriesItem + 2 CategoryItems (travel, flights)
+            items = cat_sidebar.query(CategoryItem)
+            assert len(items) == 2
+            # flights should have depth > 0
+            flights_item = next((i for i in items if i.category.name == "flights"), None)
+            assert flights_item is not None
+            assert flights_item._depth == 1
 
 
 class TestImportDialog:

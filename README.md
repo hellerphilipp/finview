@@ -23,17 +23,31 @@ If a database path is provided, FinView opens (or creates) that file. Without on
 
 
 3. **Basic Controls**:
+
+**Sidebar Navigation**:
+* `Tab`: Switch between Accounts and Categories sidebar sections (auto-collapses the other)
+* `Enter`: Select an account/category and focus the transaction table
+* `Escape`: Return focus to last-active sidebar from the transaction table
+
+**Account Management** (when Accounts sidebar is focused):
 * `c`: Create a new account
+
+**Category Management** (when Categories sidebar is focused):
+* `c`: Create a new category (use `/` for hierarchy, e.g., `travel/flights`)
+* `d`: Delete selected category (with confirmation)
+* `e`: Rename selected category
+
+**Transaction Table**:
 * `i`: Import a CSV file (when an account with a mapping spec is selected)
-* `r`: Refresh data
 * `Enter`: Toggle reviewed status on selected transaction
+* `t`: Tag/assign a category (opens inline autocomplete; Tab confirms, Escape cancels, empty submit removes category)
 * `s`: Split a transaction
 * `m`: Merge transactions
 * `j` / `k`: Move cursor down / up
 * `g` / `G`: Jump to first / last row
 * `/`: Search transactions
 * `n` / `N`: Next / previous search match
-* `Escape`: Return focus to sidebar
+* `r`: Refresh data (reloads accounts, categories, and transactions)
 * `:q`: Quit (`:wq` to save and quit, `:q!` to discard changes)
 
 ---

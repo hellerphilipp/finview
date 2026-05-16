@@ -1,15 +1,15 @@
 """Tests for the transaction merge feature."""
 
-import pytest
 from datetime import datetime
 from decimal import Decimal
+
+import pytest
 
 import db
 import queries
 from models.finance import Account, Currency, Transaction
 from ui.app import FinViewApp
-from ui.widgets import TransactionTable, MERGE_HEADER_KEY_PREFIX
-
+from ui.widgets import MERGE_HEADER_KEY_PREFIX, TransactionTable
 
 # ── Fixtures ──
 
@@ -232,9 +232,7 @@ class TestLoadTransactionPageWithMerge:
         acc, tx1, tx2, tx3 = same_account_txs
         queries.create_merge(session, [tx1.id, tx2.id], "Group")
 
-        total, unreviewed, rows = queries.load_transaction_page(
-            session, account_id=acc.id
-        )
+        total, unreviewed, rows, _ = queries.load_transaction_page(session, account_id=acc.id)
         # 3 original txs → 1 merge parent (counted) + 2 children (not counted) + 1 normal
         # But merge parent is excluded from display rows (it's a merge parent)
         # Count: tx3 (normal) + merge parent = 2
@@ -244,7 +242,7 @@ class TestLoadTransactionPageWithMerge:
         acc, tx1, tx2, tx3 = same_account_txs
         parent = queries.create_merge(session, [tx1.id, tx2.id], "Group")
 
-        _, _, rows = queries.load_transaction_page(session, account_id=acc.id)
+        _, _, rows, _ = queries.load_transaction_page(session, account_id=acc.id)
         # Should show: header + tx1, tx2 (merge children) + tx3 (normal) = 4
         assert len(rows) == 4
         tx_ids = [r[0].id for r in rows]
@@ -260,7 +258,7 @@ class TestLoadTransactionPageWithMerge:
         acc, tx1, tx2, tx3 = same_account_txs
         queries.create_merge(session, [tx1.id, tx2.id], "Group")
 
-        _, _, rows = queries.load_transaction_page(session, account_id=acc.id)
+        _, _, rows, _ = queries.load_transaction_page(session, account_id=acc.id)
         # Find a merge child and check merge_net
         for row in rows:
             tx = row[0]
@@ -275,7 +273,7 @@ class TestLoadTransactionPageWithMerge:
         acc1, acc2, tx1, tx2 = two_accounts
         queries.create_merge(session, [tx1.id, tx2.id], "Dinner")
 
-        _, _, rows = queries.load_transaction_page(session, all_accounts=True)
+        _, _, rows, _ = queries.load_transaction_page(session, all_accounts=True)
 
         # Should have a header row + 2 children
         # Header row has account_name "–"
@@ -341,9 +339,7 @@ class TestSplitChildMerge:
         session.commit()
 
         # Should succeed: split child can be merged
-        merge_parent = queries.create_merge(
-            session, [child.id, reimbursement.id], "Split+Merge"
-        )
+        merge_parent = queries.create_merge(session, [child.id, reimbursement.id], "Split+Merge")
         session.refresh(child)
         assert child.split_parent_id == parent.id  # split relationship preserved
         assert child.merge_parent_id == merge_parent.id  # merge relationship added
@@ -428,6 +424,7 @@ class TestMergeWidget:
             await pilot.pause()
 
             from textual.widgets import Static
+
             info = pilot.app.query_one("#page-info", Static)
             assert "[merge:" in str(info.content)
 
@@ -454,6 +451,7 @@ class TestMergeWidget:
             await pilot.pause()
 
             from ui.screens import MergeTransactionScreen
+
             assert len(pilot.app.screen_stack) > 1
             assert isinstance(pilot.app.screen_stack[-1], MergeTransactionScreen)
 
@@ -594,7 +592,7 @@ class TestCrossAccountMergeQuery:
         acc1, acc2, tx1, tx2 = two_accounts
         queries.create_merge(session, [tx1.id, tx2.id], "Cross Merge")
 
-        _, _, rows = queries.load_transaction_page(session, account_id=acc1.id)
+        _, _, rows, _ = queries.load_transaction_page(session, account_id=acc1.id)
         # tx1 should appear with is_cross_account = True
         for row in rows:
             tx = row[0]
@@ -610,7 +608,7 @@ class TestCrossAccountMergeQuery:
         acc, tx1, tx2, tx3 = same_account_txs
         queries.create_merge(session, [tx1.id, tx2.id], "Same Merge")
 
-        _, _, rows = queries.load_transaction_page(session, account_id=acc.id)
+        _, _, rows, _ = queries.load_transaction_page(session, account_id=acc.id)
         for row in rows:
             tx = row[0]
             is_cross = row[4]
@@ -625,7 +623,7 @@ class TestCrossAccountMergeQuery:
         acc1, acc2, tx1, tx2 = two_accounts
         queries.create_merge(session, [tx1.id, tx2.id], "Cross Merge")
 
-        _, _, rows = queries.load_transaction_page(session, all_accounts=True)
+        _, _, rows, _ = queries.load_transaction_page(session, all_accounts=True)
         header_rows = [r for r in rows if r[1] == "–"]
         assert len(header_rows) == 1
         assert header_rows[0][0].description == "Cross Merge"
@@ -685,9 +683,9 @@ class TestCrossAccountMergeWidget:
                 row_key = table._row_locations.get_key(row_idx)
                 if row_key and row_key.value in (str(tx1.id), str(tx2.id)):
                     desc_value = str(table.get_cell(row_key, "description"))
-                    assert "├─" in desc_value or "└─" in desc_value, (
-                        f"Expected tree prefix in '{desc_value}'"
-                    )
+                    assert (
+                        "├─" in desc_value or "└─" in desc_value
+                    ), f"Expected tree prefix in '{desc_value}'"
                     assert "[m+]" not in desc_value
                     assert row_key.value in table._merge_child_rows
                     found_child = True

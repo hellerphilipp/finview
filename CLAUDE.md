@@ -17,18 +17,19 @@ The codebase is organized into layers, though currently the UI accesses the data
 ```
 main.py              # Entry point (minimal — just starts FinViewApp)
 db.py                # Session/Engine config (SQLite at ./db.finview)
+queries.py           # Query functions: accounts, categories, transactions, merges
 models/
   base.py            # Declarative base & naming conventions
-  finance.py         # Account, Transaction, Currency enum
+  finance.py         # Account, Transaction, Category, Currency enum
 importers/
   engine.py          # CSVImporter: loads YAML spec, parses CSV rows via CEL
   schema.py          # Pydantic models: ImporterMapping, DataMapping, ParserConfig
   Swisscard/         # Example bank-specific YAML spec
 ui/
-  app.py             # FinViewApp: layout, keybindings, account/import logic
+  app.py             # FinViewApp: layout, keybindings, account/category/import logic
   app.tcss           # Textual CSS styling
-  screens.py         # Modal screens: CreateAccountScreen, ImportFileDialog
-  widgets.py         # TransactionTable, AccountItem, AllAccountsItem
+  screens.py         # Modal screens: account, category, split, merge, import
+  widgets.py         # Sidebar sections, TransactionTable, CategoryAutocomplete
 alembic/             # Migrations (render_as_batch=True for SQLite)
 ```
 
@@ -43,13 +44,26 @@ alembic/             # Migrations (render_as_batch=True for SQLite)
 
 ## Key Bindings
 
+**Sidebar Navigation**:
+* `Tab` — Switch between Accounts ↔ Categories sidebar sections (auto-collapse)
+* `Enter` — Select account/category and focus transaction table
+* `Escape` — Return focus to last-active sidebar
+
+**Account Sidebar**: `c` — Create new account
+
+**Category Sidebar**: `c` — Create, `d` — Delete, `e` — Rename
+
+**Transaction Table**:
 * `q` — Quit
-* `r` — Refresh data (reload accounts and transactions)
-* `c` — Create new account (opens modal)
-* `i` — Import CSV (in transaction table, requires account with mapping spec)
-* `a` — Toggle reviewed status on selected transaction
-* `n` / `p` — Next / previous page in transaction table
-* `Escape` — Return focus to sidebar
+* `r` — Refresh data (reload accounts, categories, and transactions)
+* `i` — Import CSV (requires account with mapping spec)
+* `t` — Tag/assign category (inline autocomplete)
+* `Enter` — Toggle reviewed status
+* `s` — Split transaction
+* `m` — Merge transactions
+* `j` / `k` — Move down / up
+* `g` / `G` — Jump to first / last row
+* `/` — Search, `n` / `N` — Next / previous match
 
 ## Commands
 
