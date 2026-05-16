@@ -1,4 +1,4 @@
-# FinView — terminal-based personal finance manager
+# FinView — personal finance manager
 # Copyright (C) 2026 Philipp Heller
 #
 # This program is free software: you can redistribute it and/or modify
@@ -16,15 +16,13 @@
 
 import argparse
 import os
+import subprocess
 import sys
-
-from db import init_memory_db, load_db_from_file, init_new_db, has_pending_migrations, run_migrations
-from ui.app import FinViewApp
 
 _COPYRIGHT = "FinView Copyright (C) 2026 Philipp Heller"
 
 _LICENSE_NOTICE = """\
-FinView — terminal-based personal finance manager
+FinView — personal finance manager
 Copyright (C) 2026 Philipp Heller
 
 This program is free software: you can redistribute it and/or modify
@@ -49,9 +47,9 @@ under certain conditions; see LICENSE.md for details."""
 
 def main():
     parser = argparse.ArgumentParser(
-        description="FinView — a terminal-based personal finance manager. "
+        description="FinView — a personal finance manager. "
         "Manage bank accounts, import transactions from CSV files, "
-        "review transactions, and track balances — all from the terminal.",
+        "review transactions, and track balances.",
         epilog=_EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -79,27 +77,13 @@ def main():
         print(_LICENSE_NOTICE)
         sys.exit(0)
 
-    if args.database is None:
-        init_memory_db()
-    else:
-        db_path = os.path.abspath(os.path.expanduser(args.database))
-        if os.path.exists(db_path):
-            load_db_from_file(db_path)
-            if has_pending_migrations():
-                db_name = os.path.basename(db_path)
-                print(f"Database '{db_name}' was created by an older version of FinView.")
-                answer = input("Apply database upgrade now? [y/N] ").strip().lower()
-                if answer in ("y", "yes"):
-                    run_migrations()
-                    print("Database upgraded successfully.")
-                else:
-                    print("Cannot open database without upgrading. Exiting.")
-                    sys.exit(0)
-        else:
-            init_new_db(db_path)
+    app_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app.py")
+    cmd = [sys.executable, "-m", "streamlit", "run", app_path, "--"]
 
-    app = FinViewApp()
-    app.run()
+    if args.database:
+        cmd.append(os.path.abspath(os.path.expanduser(args.database)))
+
+    subprocess.run(cmd)
 
 
 if __name__ == "__main__":

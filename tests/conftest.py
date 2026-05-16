@@ -120,9 +120,3 @@ def sample_account_with_categories(session, sample_account, sample_category):
     return sample_account, travel, flights
 
 
-@pytest.fixture()
-def finview_app(memory_db):
-    """Return a FinViewApp instance ready for run_test()."""
-    from ui.app import FinViewApp
-
-    return FinViewApp()

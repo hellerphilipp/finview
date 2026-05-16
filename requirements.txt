@@ -1,6 +1,6 @@
-textual>=8.2.5,<9
-textual-autocomplete>=4.0,<5
+streamlit>=1.45,<2
 sqlalchemy
 PyYAML
 pydantic
 common-expression-language
+pandas

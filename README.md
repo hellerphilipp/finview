@@ -1,8 +1,6 @@
 # FinView
 
-FinView is a lightweight, terminal-based personal finance tracker. It allows you to manage accounts, view transaction histories, and import data from various bank CSV exports using a flexible CEL-based mapping system.
-
-![FinView UI](docs/assets/demo_2026-01-18T16_58_01_488862.svg)
+FinView is a lightweight, local-first personal finance manager. It allows you to manage accounts, view transaction histories, and import data from various bank CSV exports using a flexible CEL-based mapping system.
 
 ---
 
@@ -21,34 +19,32 @@ python main.py [database]
 ```
 If a database path is provided, FinView opens (or creates) that file. Without one, it starts with a pure in-memory database. Use `--version` or `--license` for version/license info.
 
+You can also run the Streamlit app directly:
+```bash
+streamlit run app.py -- [database]
+```
 
-3. **Basic Controls**:
 
-**Sidebar Navigation**:
-* `Tab`: Switch between Accounts and Categories sidebar sections (auto-collapses the other)
-* `Enter`: Select an account/category and focus the transaction table
-* `Escape`: Return focus to last-active sidebar from the transaction table
+3. **Using the app**:
 
-**Account Management** (when Accounts sidebar is focused):
-* `c`: Create a new account
+The app has four tabs accessible via the sidebar:
 
-**Category Management** (when Categories sidebar is focused):
-* `c`: Create a new category (use `/` for hierarchy, e.g., `travel/flights`)
-* `d`: Delete selected category (with confirmation)
-* `e`: Rename selected category
+**Accounts & Categories**: Create and view accounts with balances. Create, rename, and delete hierarchical categories (use `/` for nesting, e.g., `travel/flights`).
 
-**Transaction Table**:
-* `i`: Import a CSV file (when an account with a mapping spec is selected)
-* `Enter`: Toggle reviewed status on selected transaction
-* `t`: Tag/assign a category (opens inline autocomplete; Tab confirms, Escape cancels, empty submit removes category)
-* `s`: Split a transaction
-* `m`: Merge transactions
-* `j` / `k`: Move cursor down / up
-* `g` / `G`: Jump to first / last row
-* `/`: Search transactions
-* `n` / `N`: Next / previous search match
-* `r`: Refresh data (reloads accounts, categories, and transactions)
-* `:q`: Quit (`:wq` to save and quit, `:q!` to discard changes)
+**Import Transactions**: Upload a CSV file, select an account with a mapping spec, and import. A warning is shown if imported transactions are older than the latest existing transaction (potential duplicates).
+
+**Transactions**: View, search, and manage transactions:
+- Filter by account
+- Search by description
+- Toggle reviewed status
+- Assign categories
+- Split transactions into parts
+- Merge related transactions into groups
+- Edit descriptions
+
+**Analysis**: Coming soon.
+
+A **Save** button in the sidebar persists changes to disk. Unsaved changes are indicated with a warning.
 
 ---
 
@@ -60,7 +56,7 @@ Run the test suite with:
 python -m pytest tests/ -v
 ```
 
-Tests cover all layers: domain models, the CSV importer engine, the database layer, and headless TUI tests using Textual's `run_test()` framework. They use an in-memory SQLite database so no files or external setup are needed.
+Tests cover all layers: domain models, the CSV importer engine, the database layer, and the service layer. They use an in-memory SQLite database so no files or external setup are needed.
 
 ---
 
@@ -104,7 +100,7 @@ mappings:
 
 1. Create a new `.yaml` file inside the `importers/` directory (or a subdirectory)
 2. Define the logic based on your bank's CSV column order (e.g., `row[0]` is the first column)
-3. Restart FinView; the new mapping will automatically appear in the "Import Mapping Spec" dropdown when creating or editing an account
+3. Restart FinView; the new mapping will automatically appear in the "Import Mapping Spec" dropdown when creating an account
 
 ---
 
