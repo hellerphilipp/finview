@@ -346,12 +346,13 @@ def render_transactions():
         display_rows.append(
             {
                 "id": tx.id,
+                "select": False,
                 "date": tx.date.strftime("%Y-%m-%d"),
                 "description": desc,
-                "category": cat_path,
+                "category": cat_path if cat_path else None,
                 "amount": float(tx.value_in_account_currency),
                 "currency": tx.original_currency.value,
-                "reviewed": "Yes" if tx.reviewed_at else "",
+                "reviewed": bool(tx.reviewed_at),
                 "account": acc_name or "",
                 "_tx": tx,
                 "_is_merge_header": has_children,
@@ -363,31 +364,63 @@ def render_transactions():
         st.info("No transactions found.")
         return
 
-    # --- Display table with row selection ---
+    # --- Display table with inline editing ---
     import pandas as pd
 
-    cols = ["date", "description", "category", "amount", "currency", "reviewed"]
+    cat_path_list = queries.get_all_category_paths(session)
+    cat_options_list = [p for _, p in cat_path_list]
+    cat_path_to_id = {p: cid for cid, p in cat_path_list}
+
+    cols = ["select", "date", "description", "category", "amount", "currency", "reviewed"]
     if all_accounts:
-        cols.insert(1, "account")
+        cols.insert(2, "account")
 
     df = pd.DataFrame(display_rows)[cols]
-    event = st.dataframe(
+    edited_df = st.data_editor(
         df,
         use_container_width=True,
         hide_index=True,
-        selection_mode="multi-row",
-        on_select="rerun",
+        disabled=["date", "account", "description", "amount", "currency"],
         column_config={
+            "select": st.column_config.CheckboxColumn("", default=False, width="small"),
+            "reviewed": st.column_config.CheckboxColumn("reviewed", default=False),
+            "category": st.column_config.SelectboxColumn(
+                "category", options=cat_options_list, default=None
+            ),
             "amount": st.column_config.NumberColumn(format="%.2f"),
         },
+        key="tx_editor",
     )
 
-    selected_indices = event.selection.rows
+    # --- Apply inline edits (reviewed + category) on explicit action ---
+    edited_rows = st.session_state.get("tx_editor", {}).get("edited_rows", {})
+    # Filter to only reviewed/category changes (ignore "select" toggles)
+    pending_edits = {
+        int(idx): changes
+        for idx, changes in edited_rows.items()
+        if "reviewed" in changes or "category" in changes
+    }
+
+    if pending_edits:
+        if st.button("Apply Changes"):
+            for idx, changes in pending_edits.items():
+                tx = display_rows[idx]["_tx"]
+                if "reviewed" in changes:
+                    queries.set_reviewed(session, tx.id, bool(changes["reviewed"]))
+                if "category" in changes:
+                    new_cat = changes["category"]
+                    new_cat_id = cat_path_to_id.get(new_cat) if new_cat else None
+                    queries.assign_category(session, tx.id, new_cat_id)
+            db.mark_dirty()
+            st.rerun()
+
+    # --- Actions based on selected rows ---
+    selected_mask = edited_df["select"].astype(bool)
+    selected_indices = selected_mask[selected_mask].index.tolist()
     selected_rows = [display_rows[i] for i in selected_indices]
     selected_txs = [r["_tx"] for r in selected_rows]
     num_selected = len(selected_rows)
 
-    # --- Actions ---
     st.divider()
 
     if num_selected == 0:
@@ -395,50 +428,18 @@ def render_transactions():
     else:
         st.markdown(f"**{num_selected} transaction(s) selected**")
 
-        action_cols = st.columns(4)
-
-        # Bulk review/unreview
-        with action_cols[0]:
-            all_reviewed = all(tx.reviewed_at for tx in selected_txs)
-            if all_reviewed:
-                review_label = "Unreview All" if num_selected > 1 else "Unreview"
-            else:
-                review_label = "Review All" if num_selected > 1 else "Review"
-            if st.button(review_label):
-                target_state = not all_reviewed
-                for tx in selected_txs:
-                    queries.set_reviewed(session, tx.id, target_state)
-                db.mark_dirty()
-                st.rerun()
-
-        # Bulk category assignment
-        with action_cols[1]:
-            cat_paths = queries.get_all_category_paths(session)
-            if cat_paths:
-                cat_options = {"(none)": None} | {
-                    path: cid for cid, path in cat_paths
-                }
-                new_cat = st.selectbox(
-                    "Category",
-                    list(cat_options.keys()),
-                    key="assign_cat",
-                )
-                if st.button("Assign Category"):
-                    for tx in selected_txs:
-                        queries.assign_category(session, tx.id, cat_options[new_cat])
-                    db.mark_dirty()
-                    st.rerun()
+        action_cols = st.columns(3)
 
         # Single-row actions: Split + Edit Description
         if num_selected == 1:
             selected_tx = selected_txs[0]
             selected_row = selected_rows[0]
 
-            with action_cols[2]:
+            with action_cols[0]:
                 if st.button("Split"):
                     st.session_state["split_tx_id"] = selected_tx.id
 
-            with action_cols[3]:
+            with action_cols[1]:
                 new_desc = st.text_input(
                     "Description", value=selected_tx.description, key="edit_desc"
                 )
@@ -450,7 +451,7 @@ def render_transactions():
 
         # Multi-row action: Merge
         if num_selected >= 2:
-            with action_cols[2]:
+            with action_cols[0]:
                 if st.button("Merge Selected"):
                     st.session_state["merge_ids"] = [tx.id for tx in selected_txs]
 
