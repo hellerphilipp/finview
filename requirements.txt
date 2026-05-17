@@ -3,3 +3,4 @@ PyYAML
 pydantic
 common-expression-language
 questionary
+openpyxl

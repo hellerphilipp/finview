@@ -21,6 +21,7 @@ from decimal import Decimal, InvalidOperation
 import questionary
 
 import db
+import excel_export
 import queries
 import services
 from models.finance import Account, Currency
@@ -34,6 +35,7 @@ def run(session_factory):
         choices = [
             questionary.Choice("Manage Accounts", value="accounts"),
             questionary.Choice("Import Transactions", value="import"),
+            questionary.Choice("Open in Excel", value="excel"),
         ]
         if db.db_file_path:
             choices.append(questionary.Choice("Save", value="save"))
@@ -48,6 +50,8 @@ def run(session_factory):
             _accounts_menu(session_factory)
         elif choice == "import":
             _import_menu(session_factory)
+        elif choice == "excel":
+            _open_in_excel(session_factory)
         elif choice == "save":
             _save()
 
@@ -231,6 +235,14 @@ def _edit_account(session_factory):
         db.mark_dirty()
 
     print("  Account updated.")
+
+
+# --- Excel export ---
+
+
+def _open_in_excel(session_factory):
+    path = excel_export.export_to_excel(session_factory)
+    print(f"  Opened {path}")
 
 
 # --- Import sub-menu ---
