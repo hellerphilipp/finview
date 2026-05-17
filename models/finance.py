@@ -54,6 +54,7 @@ class Category(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(100))
     parent_id: Mapped[int | None] = mapped_column(ForeignKey("categories.id", ondelete="CASCADE"))
+    color: Mapped[str | None] = mapped_column(String(20))
 
     parent: Mapped["Category | None"] = relationship(
         "Category", remote_side=[id], back_populates="children"

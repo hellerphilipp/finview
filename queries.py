@@ -158,10 +158,11 @@ def get_categories_with_transaction_counts(
     return result
 
 
-def create_category(session: Session, path_string: str) -> Category:
+def create_category(session: Session, path_string: str, color: str | None = None) -> Category:
     """Create a category from a '/'-separated path, reusing existing ancestors.
 
     E.g., 'travel/flights' creates 'travel' (if missing) then 'flights' under it.
+    The color, if provided, is applied only to the leaf node.
     """
     segments = [s.strip() for s in path_string.split("/") if s.strip()]
     if not segments:
@@ -187,6 +188,9 @@ def create_category(session: Session, path_string: str) -> Category:
             session.add(cat)
             session.flush()
         parent_id = cat.id
+
+    if color is not None and cat is not None:
+        cat.color = color
 
     session.commit()
     return cat
@@ -220,6 +224,85 @@ def rename_category(session: Session, category_id: int, new_name: str) -> Catego
         raise ValueError(f"A sibling category named '{new_name}' already exists")
 
     cat.name = new_name
+    session.commit()
+    return cat
+
+
+def update_category_color(session: Session, category_id: int, color: str | None) -> Category:
+    """Set or clear the display color of a category."""
+    cat = session.get(Category, category_id)
+    if cat is None:
+        raise ValueError("Category not found")
+    cat.color = color
+    session.commit()
+    return cat
+
+
+def move_category(session: Session, category_id: int, new_full_path: str) -> Category:
+    """Rename and/or reparent a category using a full slash-path.
+
+    Parses new_full_path, finds or creates the parent chain up to (but not
+    including) the final segment, then updates parent_id and leaf name.
+    """
+    segments = [s.strip() for s in new_full_path.split("/") if s.strip()]
+    if not segments:
+        raise ValueError("New path cannot be empty")
+
+    cat = session.get(Category, category_id)
+    if cat is None:
+        raise ValueError("Category not found")
+
+    new_leaf_name = segments[-1]
+    parent_segments = segments[:-1]
+
+    # Resolve or create the new parent chain
+    new_parent_id = None
+    for segment in parent_segments:
+        existing = session.execute(
+            select(Category).where(
+                Category.name == segment,
+                (
+                    Category.parent_id == new_parent_id
+                    if new_parent_id is not None
+                    else Category.parent_id.is_(None)
+                ),
+            )
+        ).scalar_one_or_none()
+        if existing:
+            if existing.id == category_id:
+                raise ValueError("Cannot move a category under itself")
+            new_parent_id = existing.id
+        else:
+            new_ancestor = Category(name=segment, parent_id=new_parent_id)
+            session.add(new_ancestor)
+            session.flush()
+            new_parent_id = new_ancestor.id
+
+    # Walk up from new_parent_id to detect indirect cycles
+    check_id = new_parent_id
+    while check_id is not None:
+        if check_id == category_id:
+            raise ValueError("Cannot move a category under one of its own descendants")
+        ancestor = session.get(Category, check_id)
+        check_id = ancestor.parent_id if ancestor else None
+
+    # Check for duplicate sibling at destination
+    dup = session.execute(
+        select(Category).where(
+            Category.name == new_leaf_name,
+            (
+                Category.parent_id == new_parent_id
+                if new_parent_id is not None
+                else Category.parent_id.is_(None)
+            ),
+            Category.id != category_id,
+        )
+    ).scalar_one_or_none()
+    if dup:
+        raise ValueError(f"A category named '{new_leaf_name}' already exists at that location")
+
+    cat.name = new_leaf_name
+    cat.parent_id = new_parent_id
     session.commit()
     return cat
 

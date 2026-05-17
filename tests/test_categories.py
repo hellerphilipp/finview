@@ -151,6 +151,145 @@ class TestAssignCategory:
             queries.assign_category(session, 9999, None)
 
 
+class TestCreateCategoryWithColor:
+    def test_creates_with_color(self, session):
+        cat = queries.create_category(session, "food/dining", color="red")
+        assert cat.color == "red"
+        assert cat.parent.color is None
+
+    def test_creates_without_color_default(self, session):
+        cat = queries.create_category(session, "utilities")
+        assert cat.color is None
+
+
+class TestUpdateCategoryColor:
+    def test_set_color(self, sample_category, session):
+        travel, _ = sample_category
+        result = queries.update_category_color(session, travel.id, "blue")
+        assert result.color == "blue"
+        session.refresh(travel)
+        assert travel.color == "blue"
+
+    def test_clear_color(self, sample_category, session):
+        travel, _ = sample_category
+        travel.color = "red"
+        session.commit()
+        result = queries.update_category_color(session, travel.id, None)
+        assert result.color is None
+
+    def test_update_nonexistent_raises(self, session):
+        with pytest.raises(ValueError, match="not found"):
+            queries.update_category_color(session, 9999, "red")
+
+    def test_color_persists_after_refresh(self, sample_category, session):
+        _, flights = sample_category
+        queries.update_category_color(session, flights.id, "green")
+        session.expire_all()
+        session.refresh(flights)
+        assert flights.color == "green"
+
+    def test_set_color_does_not_affect_sibling(self, sample_category, session):
+        travel, flights = sample_category
+        queries.update_category_color(session, travel.id, "red")
+        session.refresh(flights)
+        assert flights.color is None
+
+
+class TestMoveCategory:
+    def test_rename_leaf(self, sample_category, session):
+        travel, flights = sample_category
+        result = queries.move_category(session, flights.id, "travel/airtravel")
+        assert result.name == "airtravel"
+        assert result.parent_id == travel.id
+
+    def test_reparent_to_existing(self, session):
+        food = Category(name="food")
+        session.add(food)
+        session.flush()
+        groceries = Category(name="groceries", parent_id=food.id)
+        travel = Category(name="travel")
+        session.add_all([groceries, travel])
+        session.commit()
+
+        result = queries.move_category(session, groceries.id, "travel/groceries")
+        assert result.parent_id == travel.id
+        assert result.name == "groceries"
+
+    def test_move_to_root(self, sample_category, session):
+        _, flights = sample_category
+        result = queries.move_category(session, flights.id, "flights")
+        assert result.parent_id is None
+        assert result.name == "flights"
+
+    def test_creates_new_parent(self, sample_category, session):
+        _, flights = sample_category
+        result = queries.move_category(session, flights.id, "transport/air/flights")
+        assert result.name == "flights"
+        parent = session.get(Category, result.parent_id)
+        assert parent.name == "air"
+        grandparent = session.get(Category, parent.parent_id)
+        assert grandparent.name == "transport"
+
+    def test_rejects_empty_path(self, sample_category, session):
+        travel, _ = sample_category
+        with pytest.raises(ValueError, match="empty"):
+            queries.move_category(session, travel.id, "")
+
+    def test_rejects_nonexistent_category(self, session):
+        with pytest.raises(ValueError, match="not found"):
+            queries.move_category(session, 9999, "food")
+
+    def test_rejects_duplicate_sibling(self, session):
+        a = Category(name="a")
+        b = Category(name="b")
+        session.add_all([a, b])
+        session.commit()
+        with pytest.raises(ValueError, match="already exists"):
+            queries.move_category(session, a.id, "b")
+
+    def test_rejects_move_under_self(self, sample_category, session):
+        travel, _ = sample_category
+        with pytest.raises(ValueError):
+            queries.move_category(session, travel.id, "travel/travel")
+
+    def test_rejects_move_under_descendant(self, sample_category, session):
+        travel, flights = sample_category
+        with pytest.raises(ValueError):
+            queries.move_category(session, travel.id, "travel/flights/travel")
+
+    def test_full_path_updated_after_move(self, sample_category, session):
+        _, flights = sample_category
+        queries.move_category(session, flights.id, "transport/flights")
+        session.expire_all()
+        session.refresh(flights)
+        assert flights.full_path == "transport/flights"
+
+    def test_move_preserves_color(self, sample_category, session):
+        _, flights = sample_category
+        flights.color = "blue"
+        session.commit()
+        result = queries.move_category(session, flights.id, "travel/airtravel")
+        assert result.color == "blue"
+
+    def test_move_preserves_children(self, session):
+        parent = Category(name="parent")
+        session.add(parent)
+        session.flush()
+        child = Category(name="child", parent_id=parent.id)
+        session.add(child)
+        session.flush()
+        grandchild = Category(name="grandchild", parent_id=child.id)
+        session.add(grandchild)
+        session.commit()
+
+        queries.move_category(session, parent.id, "newparent")
+        session.expire_all()
+        session.refresh(child)
+        assert child.parent_id == parent.id
+        session.refresh(grandchild)
+        assert grandchild.parent_id == child.id
+
+
 class TestLoadTransactionPageWithCategories:
     def test_returns_category_paths(self, sample_account_with_categories, session):
         acc, travel, flights = sample_account_with_categories
