@@ -113,8 +113,10 @@ def apply_split(
 
 
 def discover_mapping_specs(
-    base_path: str = "./importers",
+    base_path: str | None = None,
 ) -> list[tuple[str, str | None]]:
+    if base_path is None:
+        base_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "importers")
     """Scan importers directory for valid YAML mapping specs.
 
     Returns list of (display_name, relative_path_or_None) tuples.

@@ -1,6 +1,5 @@
-streamlit>=1.45,<2
 sqlalchemy
 PyYAML
 pydantic
 common-expression-language
-pandas
+questionary

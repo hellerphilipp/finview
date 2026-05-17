@@ -9,9 +9,7 @@ FinView is a lightweight, local-first personal finance manager. It allows you to
 1. **Install dependencies**:
 ```bash
 pip install -r requirements.txt
-
 ```
-
 
 2. **Run the application**:
 ```bash
@@ -19,28 +17,15 @@ python main.py [database]
 ```
 If a database path is provided, FinView opens (or creates) that file. Without one, it starts with a pure in-memory database. Use `--version` or `--license` for version/license info.
 
-You can also run the Streamlit app directly:
-```bash
-streamlit run app.py -- [database]
-```
-
-
 3. **Using the app**:
 
-The app has four tabs accessible via the sidebar:
+FinView provides an interactive CLI with arrow-key menus:
 
-**Accounts & Categories**: Create and view accounts with balances. Create, rename, and delete hierarchical categories (use `/` for nesting, e.g., `travel/flights`).
+**Manage Accounts**: Create, list, and edit accounts. Each account has a name, currency, optional import schema (mapping spec), and an initial balance.
 
-**Import Transactions**: Upload a CSV file, select an account with a mapping spec, and import. A warning is shown if imported transactions are older than the latest existing transaction (potential duplicates).
+**Import Transactions**: Select an account and provide a path to a CSV file. The importer uses the account's mapping spec to parse rows into transactions.
 
-**Transactions**: View and manage transactions in an editable table:
-- Filter by account; use the built-in toolbar search to find transactions
-- Toggle reviewed status and assign categories directly in the table (click "Apply Changes" to save)
-- Select rows via checkboxes for bulk actions: split, merge, or edit descriptions
-
-**Analysis**: Coming soon.
-
-A **Save** button in the sidebar persists changes to disk. Unsaved changes are indicated with a warning.
+Changes are held in memory until you explicitly **Save** (or save on quit). Unsaved changes trigger a confirmation prompt when quitting.
 
 ---
 
@@ -96,7 +81,7 @@ mappings:
 
 1. Create a new `.yaml` file inside the `importers/` directory (or a subdirectory)
 2. Define the logic based on your bank's CSV column order (e.g., `row[0]` is the first column)
-3. Restart FinView; the new mapping will automatically appear in the "Import Mapping Spec" dropdown when creating an account
+3. Restart FinView; the new mapping will automatically appear in the import schema selection when creating an account
 
 ---
 

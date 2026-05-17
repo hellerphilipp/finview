@@ -16,7 +16,6 @@
 
 import argparse
 import os
-import subprocess
 import sys
 
 _COPYRIGHT = "FinView Copyright (C) 2026 Philipp Heller"
@@ -77,16 +76,27 @@ def main():
         print(_LICENSE_NOTICE)
         sys.exit(0)
 
-    app_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app.py")
-    cmd = [sys.executable, "-m", "streamlit", "run", app_path, "--"]
+    import db
 
     if args.database:
-        cmd.append(os.path.abspath(os.path.expanduser(args.database)))
+        path = os.path.abspath(os.path.expanduser(args.database))
+        if os.path.exists(path):
+            db.load_db_from_file(path)
+            if db.has_pending_migrations():
+                print("Applying database migrations...")
+                db.run_migrations()
+                print("Migrations applied.")
+        else:
+            db.init_new_db(path)
+    else:
+        db.init_memory_db()
+
+    import cli
 
     try:
-        subprocess.run(cmd)
+        cli.run(db.SessionLocal)
     except KeyboardInterrupt:
-        pass
+        print("\nBye.")
 
 
 if __name__ == "__main__":
