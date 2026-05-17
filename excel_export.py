@@ -20,7 +20,8 @@ import tempfile
 from pathlib import Path
 
 from openpyxl import load_workbook
-from openpyxl.styles import Protection
+from openpyxl.formatting.rule import FormulaRule
+from openpyxl.styles import PatternFill, Protection
 from openpyxl.utils import get_column_letter, range_boundaries
 from openpyxl.worksheet.datavalidation import DataValidation
 from sqlalchemy import select, text
@@ -31,6 +32,18 @@ from models.finance import Account, Transaction
 
 
 EXPORT_PATH = Path(tempfile.gettempdir()) / "finview_transactions.xlsx"
+
+_EXCEL_COLOR_HEX = {
+    "red":    "FFFF8080",
+    "orange": "FFFFB366",
+    "yellow": "FFFFFF80",
+    "green":  "FF80FF80",
+    "teal":   "FF80FFFF",
+    "blue":   "FF8080FF",
+    "purple": "FFCC80FF",
+    "pink":   "FFFF80FF",
+    "gray":   "FFC0C0C0",
+}
 TEMPLATE_PATH = Path(__file__).parent / "finview_transactions_template.xlsx"
 
 
@@ -47,10 +60,11 @@ def export_to_excel(session_factory):
             .all()
         )
         category_path_map = queries._build_category_path_map(session)
+        category_color_map = queries.get_category_color_map(session)
 
         _build_categories_sheet(wb, category_paths)
         _build_accounts_sheet(wb, accounts)
-        _build_transactions_sheet(wb, transactions, category_path_map, len(category_paths))
+        _build_transactions_sheet(wb, transactions, category_path_map, len(category_paths), category_color_map)
 
     wb.active = wb["Transactions"]
     wb.save(str(EXPORT_PATH))
@@ -100,7 +114,7 @@ _COL_MERGE_PARENT = 15
 _NUM_COLS = _COL_MERGE_PARENT  # last column index
 
 
-def _build_transactions_sheet(wb, transactions, category_path_map, num_categories):
+def _build_transactions_sheet(wb, transactions, category_path_map, num_categories, category_color_map):
     ws = wb["Transactions"]
 
     # Clear fake template data (keep title rows 1–5)
@@ -165,6 +179,20 @@ def _build_transactions_sheet(wb, transactions, category_path_map, num_categorie
             cf_obj.sqref = f"F{_DATA_START_ROW}:F{last_row}"
         new_cf_rules[cf_obj] = rules
     ws.conditional_formatting._cf_rules = new_cf_rules
+
+    # Add per-category color rules (category column only).
+    cat_col_letter = get_column_letter(_COL_CATEGORY)
+    cat_col_range = f"{cat_col_letter}{_DATA_START_ROW}:{cat_col_letter}{last_row}"
+    for path, color_name in category_color_map.items():
+        hex_color = _EXCEL_COLOR_HEX.get(color_name)
+        if not hex_color:
+            continue
+        fill = PatternFill(start_color=hex_color, end_color=hex_color, fill_type="solid")
+        rule = FormulaRule(
+            formula=[f'${cat_col_letter}{_DATA_START_ROW}="{path}"'],
+            fill=fill,
+        )
+        ws.conditional_formatting.add(cat_col_range, rule)
 
     if not transactions:
         return

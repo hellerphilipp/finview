@@ -139,6 +139,15 @@ def get_all_category_paths(session: Session) -> list[tuple[int, str]]:
     return sorted(path_map.items(), key=lambda x: x[1].lower())
 
 
+def get_category_color_map(session: Session) -> dict[str, str]:
+    """Return {full_path: color_name} for all categories that have a color set."""
+    path_map = _build_category_path_map(session)
+    cats = session.execute(
+        select(Category).where(Category.color.is_not(None))
+    ).scalars().all()
+    return {path_map[cat.id]: cat.color for cat in cats if cat.id in path_map}
+
+
 def get_categories_with_transaction_counts(
     session: Session,
 ) -> list[tuple[Category, int, str]]:

@@ -341,6 +341,28 @@ def test_column_discovery_by_name(
     assert tx.reviewed_at is not None
 
 
+def test_category_color_conditional_formatting(session_factory, seeded_db):
+    """Categories with colors produce formula-based CF rules on the Transactions sheet."""
+    import queries
+
+    with db.SessionLocal() as session:
+        queries.update_category_color(session, seeded_db["food"].id, "green")
+
+    path = excel_export.export_to_excel(session_factory)
+    from openpyxl import load_workbook
+
+    wb = load_workbook(str(path))
+    ws = wb["Transactions"]
+
+    formulas = []
+    for cf_obj, rules in ws.conditional_formatting._cf_rules.items():
+        for rule in rules:
+            if hasattr(rule, "formula") and rule.formula:
+                formulas.extend(rule.formula)
+
+    assert any("food" in f for f in formulas)
+
+
 def test_db_marked_dirty(monkeypatch, tmp_path, session_factory, seeded_db):
     tx_a = seeded_db["tx_a"]
     db._dirty = False
