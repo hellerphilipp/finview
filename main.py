@@ -83,9 +83,16 @@ def main():
         if os.path.exists(path):
             db.load_db_from_file(path)
             if db.has_pending_migrations():
-                print("Applying database migrations...")
+                print(
+                    "This database was created by an older version of FinView and needs to be upgraded."
+                )
+                answer = input("Apply database upgrade now? [y/N] ").strip().lower()
+                if answer != "y":
+                    print("Database upgrade cancelled. Exiting.")
+                    sys.exit(0)
+                print("Applying database upgrade...")
                 db.run_migrations()
-                print("Migrations applied.")
+                print("Database upgrade complete.")
         else:
             db.init_new_db(path)
     else:
