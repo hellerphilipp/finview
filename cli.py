@@ -33,15 +33,15 @@ def run(session_factory):
         _print_accounts_table(session_factory)
 
         choices = [
-            questionary.Choice("Manage Accounts", value="accounts"),
-            questionary.Choice("Import Transactions", value="import"),
-            questionary.Choice("Open in Excel", value="excel"),
+            questionary.Choice("Manage Accounts", value="accounts", shortcut_key="m"),
+            questionary.Choice("Import Transactions", value="import", shortcut_key="i"),
+            questionary.Choice("Open in Excel", value="excel", shortcut_key="o"),
         ]
         if db.db_file_path:
-            choices.append(questionary.Choice("Save", value="save"))
-        choices.append(questionary.Choice("Quit", value="quit"))
+            choices.append(questionary.Choice("Save", value="save", shortcut_key="s"))
+        choices.append(questionary.Choice("Quit", value="quit", shortcut_key="q"))
 
-        choice = questionary.select("FinView — What would you like to do?", choices=choices).ask()
+        choice = questionary.select("FinView — What would you like to do?", choices=choices, use_shortcuts=True).ask()
 
         if choice is None or choice == "quit":
             _handle_quit()
@@ -93,10 +93,11 @@ def _accounts_menu(session_factory):
         choice = questionary.select(
             "Accounts",
             choices=[
-                questionary.Choice("Create account", value="create"),
-                questionary.Choice("Edit account", value="edit"),
-                questionary.Choice("Back", value="back"),
+                questionary.Choice("Create account", value="create", shortcut_key="c"),
+                questionary.Choice("Edit account", value="edit", shortcut_key="e"),
+                questionary.Choice("Back", value="back", shortcut_key="b"),
             ],
+            use_shortcuts=True,
         ).ask()
 
         if choice is None or choice == "back":
@@ -249,9 +250,10 @@ def _open_in_excel(session_factory):
         choice = questionary.select(
             "Excel",
             choices=[
-                questionary.Choice("Import edits", value="import"),
-                questionary.Choice("Go back (discard edits)", value="back"),
+                questionary.Choice("Import edits", value="import", shortcut_key="i"),
+                questionary.Choice("Go back (discard edits)", value="back", shortcut_key="b"),
             ],
+            use_shortcuts=True,
         ).ask()
 
         if choice is None or choice == "back":

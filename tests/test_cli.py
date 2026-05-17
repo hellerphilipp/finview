@@ -24,7 +24,7 @@ class TestAccountsMenu:
     def test_create_account(self, mock_q, session_factory):
         mock_q.text.return_value.ask.side_effect = ["Test Account", "100.00"]
         mock_q.select.return_value.ask.side_effect = ["CHF", None]  # currency, spec
-        mock_q.Choice = MagicMock(side_effect=lambda label, value=None: MagicMock(value=value))
+        mock_q.Choice = MagicMock(side_effect=lambda label, value=None, shortcut_key=None: MagicMock(value=value))
 
         with patch("cli.services") as mock_svc:
             mock_svc.discover_mapping_specs.return_value = [("No Mapping / Manual", None)]
@@ -47,7 +47,7 @@ class TestAccountsMenu:
     def test_create_account_invalid_balance(self, mock_q, session_factory, capsys):
         mock_q.text.return_value.ask.side_effect = ["Test", "not_a_number"]
         mock_q.select.return_value.ask.side_effect = ["CHF", None]
-        mock_q.Choice = MagicMock(side_effect=lambda label, value=None: MagicMock(value=value))
+        mock_q.Choice = MagicMock(side_effect=lambda label, value=None, shortcut_key=None: MagicMock(value=value))
 
         with patch("cli.services") as mock_svc:
             mock_svc.discover_mapping_specs.return_value = [("No Mapping / Manual", None)]
@@ -67,7 +67,7 @@ class TestMainLoop:
     @patch("cli.questionary")
     def test_quit_clean(self, mock_q, session_factory):
         mock_q.select.return_value.ask.return_value = "quit"
-        mock_q.Choice = MagicMock(side_effect=lambda label, value=None: MagicMock(value=value))
+        mock_q.Choice = MagicMock(side_effect=lambda label, value=None, shortcut_key=None: MagicMock(value=value))
 
         with patch("cli.db") as mock_db:
             mock_db.is_dirty.return_value = False
@@ -78,7 +78,7 @@ class TestMainLoop:
     def test_quit_dirty_with_save(self, mock_q, session_factory):
         mock_q.select.return_value.ask.return_value = "quit"
         mock_q.confirm.return_value.ask.return_value = True
-        mock_q.Choice = MagicMock(side_effect=lambda label, value=None: MagicMock(value=value))
+        mock_q.Choice = MagicMock(side_effect=lambda label, value=None, shortcut_key=None: MagicMock(value=value))
 
         with patch("cli.db") as mock_db:
             mock_db.is_dirty.return_value = True
