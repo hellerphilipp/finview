@@ -37,7 +37,7 @@ def run(session_factory):
             questionary.Choice("Import Transactions", value="import", shortcut_key="i"),
             questionary.Choice("Open in Excel", value="excel", shortcut_key="o"),
         ]
-        if db.db_file_path:
+        if db.db_file_path and db.is_dirty():
             choices.append(questionary.Choice("Save", value="save", shortcut_key="s"))
         choices.append(questionary.Choice("Quit", value="quit", shortcut_key="q"))
 
