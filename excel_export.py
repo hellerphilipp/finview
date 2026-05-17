@@ -14,16 +14,18 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+import datetime
 import subprocess
 import tempfile
 from pathlib import Path
 
-from openpyxl import Workbook
-from openpyxl.utils import get_column_letter
+from openpyxl import Workbook, load_workbook
+from openpyxl.utils import get_column_letter, range_boundaries
 from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.worksheet.table import Table, TableStyleInfo
-from sqlalchemy import select
+from sqlalchemy import select, text
 
+import db
 import queries
 from models.finance import Account, Transaction
 
@@ -215,5 +217,133 @@ def _build_transactions_sheet(wb, transactions, category_path_map, num_categorie
     for col in [COL_ACCOUNT_ID, COL_CATEGORY_ID, COL_REVIEWED_AT, COL_SPLIT_PARENT, COL_MERGE_PARENT]:
         ws.column_dimensions[get_column_letter(col)].hidden = True
 
-    # Auto-filter on header row
-    ws.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{last_row}"
+    # Table (includes auto-filter)
+    if last_row >= 2:
+        table = Table(
+            displayName="TransactionsTable",
+            ref=f"A1:{get_column_letter(len(headers))}{last_row}",
+        )
+        table.tableStyleInfo = TableStyleInfo(name="TableStyleLight1")
+        ws.add_table(table)
+
+
+def _parse_reviewed(raw) -> bool:
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, str):
+        return raw.strip().upper() == "TRUE"
+    return bool(raw)
+
+
+def _resolve_category_id(cat_text, reverse_map: dict) -> int | None:
+    if not cat_text or not str(cat_text).strip():
+        return None
+    return reverse_map.get(str(cat_text).strip())
+
+
+def import_from_excel(session_factory) -> tuple[int, int, int]:
+    """Read back a user-edited Excel export and commit changes to the database.
+
+    Returns (categories_updated, marked_reviewed, marked_unreviewed).
+    """
+    if not EXPORT_PATH.exists():
+        raise FileNotFoundError(f"Export file not found: {EXPORT_PATH}")
+
+    wb = load_workbook(str(EXPORT_PATH), data_only=True)
+    ws = wb["Transactions"]
+
+    if "TransactionsTable" not in ws.tables:
+        return 0, 0, 0
+
+    table = ws.tables["TransactionsTable"]
+    min_col, min_row, max_col, max_row = range_boundaries(table.ref)
+
+    header_row = next(
+        ws.iter_rows(
+            min_row=min_row,
+            max_row=min_row,
+            min_col=min_col,
+            max_col=max_col,
+            values_only=True,
+        )
+    )
+    col_index = {name: i for i, name in enumerate(header_row)}
+
+    required = {"id", "category", "reviewed"}
+    missing = required - col_index.keys()
+    if missing:
+        raise ValueError(f"TransactionsTable is missing required columns: {missing}")
+
+    idx_id = col_index["id"]
+    idx_category = col_index["category"]
+    idx_reviewed = col_index["reviewed"]
+
+    rows_data = []
+    for row in ws.iter_rows(
+        min_row=min_row + 1,
+        max_row=max_row,
+        min_col=min_col,
+        max_col=max_col,
+        values_only=True,
+    ):
+        tx_id = row[idx_id]
+        if tx_id is None:
+            continue
+        rows_data.append((int(tx_id), row[idx_category], row[idx_reviewed]))
+
+    with session_factory() as session:
+        pairs = queries.get_all_category_paths(session)
+    reverse_map = {path: cat_id for cat_id, path in pairs}
+
+    now = datetime.datetime.now()
+    cat_updates = []
+    mark_reviewed = []
+    mark_unreviewed = []
+
+    for tx_id, cat_text, raw_reviewed in rows_data:
+        cat_updates.append(
+            {"id": tx_id, "new_cat": _resolve_category_id(cat_text, reverse_map)}
+        )
+        if _parse_reviewed(raw_reviewed):
+            mark_reviewed.append({"id": tx_id, "now": now})
+        else:
+            mark_unreviewed.append({"id": tx_id})
+
+    with session_factory() as session:
+        cat_result = session.execute(
+            text(
+                "UPDATE transactions SET category_id = :new_cat "
+                "WHERE id = :id AND category_id IS NOT :new_cat"
+            ),
+            cat_updates,
+        )
+        categories_updated = cat_result.rowcount
+
+        if mark_reviewed:
+            rev_result = session.execute(
+                text(
+                    "UPDATE transactions SET reviewed_at = :now "
+                    "WHERE id = :id AND reviewed_at IS NULL"
+                ),
+                mark_reviewed,
+            )
+            marked_reviewed = rev_result.rowcount
+        else:
+            marked_reviewed = 0
+
+        if mark_unreviewed:
+            unrev_result = session.execute(
+                text(
+                    "UPDATE transactions SET reviewed_at = NULL "
+                    "WHERE id = :id AND reviewed_at IS NOT NULL"
+                ),
+                mark_unreviewed,
+            )
+            marked_unreviewed = unrev_result.rowcount
+        else:
+            marked_unreviewed = 0
+
+        session.commit()
+        db.mark_dirty()
+
+    return categories_updated, marked_reviewed, marked_unreviewed

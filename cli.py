@@ -243,6 +243,35 @@ def _edit_account(session_factory):
 def _open_in_excel(session_factory):
     path = excel_export.export_to_excel(session_factory)
     print(f"  Opened {path}")
+    print("  Edit the file in Excel, then choose an action below.")
+
+    while True:
+        choice = questionary.select(
+            "Excel",
+            choices=[
+                questionary.Choice("Import edits", value="import"),
+                questionary.Choice("Go back (discard edits)", value="back"),
+            ],
+        ).ask()
+
+        if choice is None or choice == "back":
+            return
+
+        if choice == "import":
+            _do_excel_import(session_factory)
+            return
+
+
+def _do_excel_import(session_factory):
+    try:
+        cats, reviewed, unreviewed = excel_export.import_from_excel(session_factory)
+    except FileNotFoundError as e:
+        print(f"  Import failed: {e}")
+        return
+    print(
+        f"  Updated categories for {cats} transaction(s). "
+        f"Marked {reviewed} as reviewed, {unreviewed} as unreviewed."
+    )
 
 
 # --- Import sub-menu ---
