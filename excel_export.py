@@ -19,10 +19,10 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from openpyxl import Workbook, load_workbook
+from openpyxl import load_workbook
+from openpyxl.styles import Protection
 from openpyxl.utils import get_column_letter, range_boundaries
 from openpyxl.worksheet.datavalidation import DataValidation
-from openpyxl.worksheet.table import Table, TableStyleInfo
 from sqlalchemy import select, text
 
 import db
@@ -31,11 +31,12 @@ from models.finance import Account, Transaction
 
 
 EXPORT_PATH = Path(tempfile.gettempdir()) / "finview_transactions.xlsx"
+TEMPLATE_PATH = Path(__file__).parent / "finview_transactions_template.xlsx"
 
 
 def export_to_excel(session_factory):
     """Export all data to an Excel workbook and open it."""
-    wb = Workbook()
+    wb = load_workbook(str(TEMPLATE_PATH))
 
     with session_factory() as session:
         category_paths = queries.get_all_category_paths(session)
@@ -49,7 +50,7 @@ def export_to_excel(session_factory):
 
         _build_categories_sheet(wb, category_paths)
         _build_accounts_sheet(wb, accounts)
-        _build_transactions_sheet(wb, transactions, category_path_map, len(category_paths), len(accounts))
+        _build_transactions_sheet(wb, transactions, category_path_map, len(category_paths))
 
     wb.active = wb["Transactions"]
     wb.save(str(EXPORT_PATH))
@@ -58,96 +59,64 @@ def export_to_excel(session_factory):
 
 
 def _build_categories_sheet(wb, category_paths):
-    ws = wb.create_sheet("Categories")
-    ws.append(["id", "path"])
+    ws = wb["Categories"]
+    if ws.max_row > 1:
+        ws.delete_rows(2, ws.max_row - 1)
+
     for cat_id, path in category_paths:
         ws.append([cat_id, path])
 
-    # Table for structured references
-    if category_paths:
-        table = Table(
-            displayName="CategoriesTable",
-            ref=f"A1:B{len(category_paths) + 1}",
-        )
-        table.tableStyleInfo = TableStyleInfo(name="TableStyleLight1")
-        ws.add_table(table)
-
-    # Lock all cells and protect
-    for row in ws.iter_rows():
-        for cell in row:
-            cell.protection = cell.protection.copy(locked=True)
-    ws.protection.sheet = True
-
-    ws.sheet_state = "hidden"
+    ws.tables["CategoriesTable"].ref = f"A1:B{len(category_paths) + 1}"
 
 
 def _build_accounts_sheet(wb, accounts):
-    ws = wb.create_sheet("Accounts")
-    ws.append(["id", "name", "currency", "mapping_spec"])
+    ws = wb["Accounts"]
+    if ws.max_row > 1:
+        ws.delete_rows(2, ws.max_row - 1)
+
     for acc in accounts:
         ws.append([acc.id, acc.name, acc.currency.value, acc.mapping_spec or ""])
 
-    if accounts:
-        table = Table(
-            displayName="AccountsTable",
-            ref=f"A1:D{len(accounts) + 1}",
-        )
-        table.tableStyleInfo = TableStyleInfo(name="TableStyleLight1")
-        ws.add_table(table)
-
-    for row in ws.iter_rows():
-        for cell in row:
-            cell.protection = cell.protection.copy(locked=True)
-    ws.protection.sheet = True
-
-    ws.sheet_state = "hidden"
+    ws.tables["AccountsTable"].ref = f"A1:D{len(accounts) + 1}"
 
 
-def _build_transactions_sheet(wb, transactions, category_path_map, num_categories, num_accounts):
-    # Remove the default sheet created by Workbook()
-    if "Sheet" in wb.sheetnames:
-        del wb["Sheet"]
+# Transactions sheet column positions (1-based); col A is a narrow spacer.
+_HEADER_ROW = 5
+_DATA_START_ROW = 6
+_COL_ID = 2
+_COL_ACCOUNT_ID = 3
+_COL_ACCOUNT = 4
+_COL_DESCRIPTION = 5
+_COL_ORIGINAL_VALUE = 6
+_COL_ORIGINAL_CURRENCY = 7
+_COL_VALUE_IN_ACCOUNT_CURRENCY = 8
+_COL_DATE = 9
+_COL_CATEGORY = 10
+_COL_CATEGORY_ID = 11
+_COL_REVIEWED = 12
+_COL_REVIEWED_AT = 13
+_COL_SPLIT_PARENT = 14
+_COL_MERGE_PARENT = 15
+_NUM_COLS = _COL_MERGE_PARENT  # last column index
 
-    ws = wb.create_sheet("Transactions")
 
-    headers = [
-        "id",
-        "account_id",
-        "account",
-        "description",
-        "original_value",
-        "original_currency",
-        "value_in_account_currency",
-        "date",
-        "category",
-        "category_id",
-        "reviewed",
-        "reviewed_at",
-        "split_parent_id",
-        "merge_parent_id",
-    ]
-    ws.append(headers)
+def _build_transactions_sheet(wb, transactions, category_path_map, num_categories):
+    ws = wb["Transactions"]
 
-    # Column indices (1-based)
-    COL_ID = 1
-    COL_ACCOUNT_ID = 2
-    COL_ACCOUNT = 3
-    COL_CATEGORY = 9
-    COL_CATEGORY_ID = 10
-    COL_REVIEWED = 11
-    COL_REVIEWED_AT = 12
-    COL_SPLIT_PARENT = 13
-    COL_MERGE_PARENT = 14
+    # Clear fake template data (keep title rows 1–5)
+    rows_to_delete = ws.max_row - _HEADER_ROW
+    if rows_to_delete > 0:
+        ws.delete_rows(_DATA_START_ROW, rows_to_delete)
 
-    for row_idx, tx in enumerate(transactions, start=2):
-        account_id_cell = f"{get_column_letter(COL_ACCOUNT_ID)}{row_idx}"
-        category_cell = f"{get_column_letter(COL_CATEGORY)}{row_idx}"
+    unlocked = Protection(locked=False)
 
-        # XLOOKUP for account name
+    for row_idx, tx in enumerate(transactions, start=_DATA_START_ROW):
+        account_id_cell = f"{get_column_letter(_COL_ACCOUNT_ID)}{row_idx}"
+        category_cell = f"{get_column_letter(_COL_CATEGORY)}{row_idx}"
+
         account_formula = (
             f'=_xlfn.XLOOKUP({account_id_cell},Accounts!A:A,Accounts!B:B,"")'
         )
-        # XLOOKUP for category_id from path
         category_id_formula = (
             f'=_xlfn.XLOOKUP({category_cell},Categories!B:B,Categories!A:A,"")'
         )
@@ -155,26 +124,48 @@ def _build_transactions_sheet(wb, transactions, category_path_map, num_categorie
         category_text = category_path_map.get(tx.category_id, "") if tx.category_id else ""
         reviewed_value = True if tx.reviewed_at else False
 
-        ws.append([
-            tx.id,
-            tx.account_id,
-            account_formula,
-            tx.description,
-            float(tx.original_value),
-            tx.original_currency.value,
-            float(tx.value_in_account_currency),
-            tx.date,
-            category_text,
-            category_id_formula,
-            reviewed_value,
-            tx.reviewed_at,
-            tx.split_parent_id,
-            tx.merge_parent_id,
-        ])
+        values = [
+            (_COL_ID, tx.id),
+            (_COL_ACCOUNT_ID, tx.account_id),
+            (_COL_ACCOUNT, account_formula),
+            (_COL_DESCRIPTION, tx.description),
+            (_COL_ORIGINAL_VALUE, float(tx.original_value)),
+            (_COL_ORIGINAL_CURRENCY, tx.original_currency.value),
+            (_COL_VALUE_IN_ACCOUNT_CURRENCY, float(tx.value_in_account_currency)),
+            (_COL_DATE, tx.date),
+            (_COL_CATEGORY, category_text),
+            (_COL_CATEGORY_ID, category_id_formula),
+            (_COL_REVIEWED, reviewed_value),
+            (_COL_REVIEWED_AT, tx.reviewed_at),
+            (_COL_SPLIT_PARENT, tx.split_parent_id),
+            (_COL_MERGE_PARENT, tx.merge_parent_id),
+        ]
+        for col, val in values:
+            ws.cell(row=row_idx, column=col).value = val
 
-    last_row = len(transactions) + 1
+        # Unlock editable cells for this new row
+        ws.cell(row=row_idx, column=_COL_CATEGORY).protection = unlocked
+        ws.cell(row=row_idx, column=_COL_REVIEWED).protection = unlocked
 
-    # Data validation: category dropdown from Categories sheet
+    last_row = _DATA_START_ROW + len(transactions) - 1 if transactions else _HEADER_ROW
+
+    # Update table ref
+    ws.tables["TransactionsTable"].ref = (
+        f"{get_column_letter(_COL_ID)}{_HEADER_ROW}:"
+        f"{get_column_letter(_NUM_COLS)}{last_row}"
+    )
+
+    # Extend conditional formatting range if needed
+    for cf_obj in ws.conditional_formatting._cf_rules:
+        if str(cf_obj.sqref).startswith("F"):
+            cf_obj.sqref = f"F{_DATA_START_ROW}:F{last_row}"
+
+    if not transactions:
+        return
+
+    # Re-add data validations (openpyxl drops extension-based validations on load)
+    data_range = f"{_DATA_START_ROW}:{last_row}"
+
     if num_categories > 0:
         cat_dv = DataValidation(
             type="list",
@@ -184,47 +175,17 @@ def _build_transactions_sheet(wb, transactions, category_path_map, num_categorie
         cat_dv.error = "Please select a valid category"
         cat_dv.errorTitle = "Invalid Category"
         ws.add_data_validation(cat_dv)
-        if last_row >= 2:
-            cat_dv.add(f"{get_column_letter(COL_CATEGORY)}2:{get_column_letter(COL_CATEGORY)}{last_row}")
-
-    # Data validation: reviewed TRUE/FALSE
-    rev_dv = DataValidation(
-        type="list",
-        formula1='"TRUE,FALSE"',
-        allow_blank=False,
-    )
-    ws.add_data_validation(rev_dv)
-    if last_row >= 2:
-        rev_dv.add(f"{get_column_letter(COL_REVIEWED)}2:{get_column_letter(COL_REVIEWED)}{last_row}")
-
-    # Protection: lock all cells, then unlock category and reviewed
-    from openpyxl.styles import Protection
-
-    locked = Protection(locked=True)
-    unlocked = Protection(locked=False)
-
-    for row in ws.iter_rows(min_row=1, max_row=last_row):
-        for cell in row:
-            cell.protection = locked
-
-    for row_idx in range(2, last_row + 1):
-        ws.cell(row=row_idx, column=COL_CATEGORY).protection = unlocked
-        ws.cell(row=row_idx, column=COL_REVIEWED).protection = unlocked
-
-    ws.protection.sheet = True
-
-    # Hide columns: account_id, category_id, reviewed_at, split_parent_id, merge_parent_id
-    for col in [COL_ACCOUNT_ID, COL_CATEGORY_ID, COL_REVIEWED_AT, COL_SPLIT_PARENT, COL_MERGE_PARENT]:
-        ws.column_dimensions[get_column_letter(col)].hidden = True
-
-    # Table (includes auto-filter)
-    if last_row >= 2:
-        table = Table(
-            displayName="TransactionsTable",
-            ref=f"A1:{get_column_letter(len(headers))}{last_row}",
+        cat_dv.add(
+            f"{get_column_letter(_COL_CATEGORY)}{_DATA_START_ROW}:"
+            f"{get_column_letter(_COL_CATEGORY)}{last_row}"
         )
-        table.tableStyleInfo = TableStyleInfo(name="TableStyleLight1")
-        ws.add_table(table)
+
+    rev_dv = DataValidation(type="list", formula1='"TRUE,FALSE"', allow_blank=False)
+    ws.add_data_validation(rev_dv)
+    rev_dv.add(
+        f"{get_column_letter(_COL_REVIEWED)}{_DATA_START_ROW}:"
+        f"{get_column_letter(_COL_REVIEWED)}{last_row}"
+    )
 
 
 def _parse_reviewed(raw) -> bool:
