@@ -155,10 +155,16 @@ def _build_transactions_sheet(wb, transactions, category_path_map, num_categorie
         f"{get_column_letter(_NUM_COLS)}{last_row}"
     )
 
-    # Extend conditional formatting range if needed
-    for cf_obj in ws.conditional_formatting._cf_rules:
+    # Extend conditional formatting range if needed.
+    # Snapshot items first — mutating a key's sqref changes its hash, which
+    # breaks further dict lookups if we iterate and mutate in-place.
+    cf_items = list(ws.conditional_formatting._cf_rules.items())
+    new_cf_rules = {}
+    for cf_obj, rules in cf_items:
         if str(cf_obj.sqref).startswith("F"):
             cf_obj.sqref = f"F{_DATA_START_ROW}:F{last_row}"
+        new_cf_rules[cf_obj] = rules
+    ws.conditional_formatting._cf_rules = new_cf_rules
 
     if not transactions:
         return
